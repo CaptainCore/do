@@ -1,0 +1,9 @@
+# --------------------------------------
+#  Resets file and folder permissions to common defaults (755 for dirs, 644 for files).
+# --------------------------------------
+function reset_permissions() {
+    echo "Resetting file and folder permissions to defaults"
+    find . -type d -exec chmod 755 {} \;
+    find . -type f -exec chmod 644 {} \;
+    echo "✅ Permissions have been reset."
+}

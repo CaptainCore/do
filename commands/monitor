@@ -1,0 +1,119 @@
+# --------------------------------------
+#  Monitors server access logs in real-time.
+# --------------------------------------
+function monitor_traffic() {
+    local limit_arg="$1"
+    local process_from_now="$2"
+
+    if ! setup_gum; then
+        echo "Aborting monitor: gum setup failed." >&2
+        return 1
+    fi
+
+    # --- Configuration ---
+    local limit=${limit_arg:-25}
+    local log="$HOME/logs/access.log"
+    local initial_lines_to_process=500 # How many lines to look back initially (only used with --now)
+    # --- End Configuration ---
+
+    if [ ! -f "$log" ]; then
+        echo "Error: Log file not found at $log" >&2
+        exit 1
+    fi
+
+    # --- Initial Setup ---
+    local start_line=1 # Default: start from the beginning
+
+    if [ "$process_from_now" = true ]; then
+        echo "Processing from near the end (--now specified)." >&2
+        local initial_log_count; initial_log_count=$(wc -l < "$log")
+        local calculated_start=$((initial_log_count - initial_lines_to_process + 1))
+        
+        if [ $calculated_start -gt 1 ]; then
+            start_line=$calculated_start
+        else
+            start_line=1
+        fi
+    else
+        echo "Processing from the beginning of the log (line 1)." >&2
+    fi
+
+    echo "Starting analysis from line: $start_line | Top hits limit: $limit" >&2
+    # --- End Initial Setup ---
+
+    trap "echo; echo 'Monitoring stopped.'; exit 0" INT
+    sleep 2 # Give user time to read initial messages
+
+    while true; do
+        local current_log_count; current_log_count=$(wc -l < "$log")
+        
+        if [ "$current_log_count" -lt "$start_line" ]; then
+            echo "Warning: Log file appears to have shrunk or rotated. Resetting start line to 1." >&2
+            start_line=1
+            sleep 1
+            current_log_count=$(wc -l < "$log")
+            if [ "$current_log_count" -lt 1 ]; then
+                echo "Log file is empty or unreadable after reset. Waiting..." >&2
+                sleep 5
+                continue
+            fi
+        fi
+
+        local actual_lines_processed=$((current_log_count - start_line + 1))
+        if [ $actual_lines_processed -lt 0 ]; then
+             actual_lines_processed=0
+        fi
+
+        local overview_header="PHP Workers,Log File,Processed,From Time,To Time\n"
+        local overview_data=""
+        local php_workers; php_workers=$(ps -eo pid,uname,comm,%cpu,%mem,time --sort=time --no-headers | grep '[p]hp-fpm' | grep -v 'root' | wc -l)
+
+        local first_line_time; first_line_time=$(sed -n "${start_line}p" "$log" | awk -F'[][]' '{print $2}' | head -n 1)
+        [ -z "$first_line_time" ] && first_line_time="N/A"
+
+        local last_line_time; last_line_time=$(tail -n 1 "$log" | awk -F'[][]' '{print $2}' | head -n 1)
+        [ -z "$last_line_time" ] && last_line_time="N/A"
+
+        overview_data+="$php_workers,$log,$actual_lines_processed,$first_line_time,$last_line_time\n"
+        local output_header="Hits,IP Address,Status Code,Last User Agent\n"
+        local output_data=""
+
+        local top_combinations; top_combinations=$(timeout 10s sed -n "$start_line,\$p" "$log" | \
+                                  awk '{print $2 " " $8}' | \
+                                  sort | \
+                                  uniq -c | \
+                                  sort -nr | \
+                                  head -n "$limit")
+
+        if [ -z "$top_combinations" ]; then
+            output_data+="0,No new data,-,\"N/A\"\n"
+        else
+            while IFS= read -r line; do
+                line=$(echo "$line" | sed 's/^[ \t]*//;s/[ \t]*$//')
+                local count ip status_code
+                read -r count ip status_code <<< "$line"
+
+                if ! [[ "$count" =~ ^[0-9]+$ ]] || [[ -z "$ip" ]] || ! [[ "$status_code" =~ ^[0-9]+$ ]]; then
+                    continue
+                fi
+
+                local ip_user_agent; ip_user_agent=$(timeout 2s sed -n "$start_line,\$p" "$log" | grep " $ip " | tail -n 1 | awk -F\" '{print $6}' | cut -c 1-100)
+                ip_user_agent=${ip_user_agent//,/}
+                ip_user_agent=${ip_user_agent//\"/}
+
+                [ -z "$ip_user_agent" ] && ip_user_agent="-"
+
+                output_data+="$count,$ip,$status_code,\"$ip_user_agent\"\n"
+            done < <(echo -e "$top_combinations")
+        fi
+
+        clear
+        echo "--- Overview (Lines $start_line - $current_log_count | Total: $actual_lines_processed) ---"
+        echo -e "$overview_header$overview_data" | "$GUM_CMD" table --print
+        echo
+        echo "--- Top $limit IP/Status Hits (Lines $start_line - $current_log_count) ---"
+        echo -e "$output_header$output_data" | "$GUM_CMD" table --print
+
+        sleep 2
+    done
+}

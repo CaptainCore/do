@@ -1,0 +1,154 @@
+# --------------------------------------
+#  Migrates a site from a backup URL or local file.
+#  Arguments:
+#    $1 - The URL/path for the backup file.
+#    $2 - A flag indicating whether to update URLs.
+# --------------------------------------
+function migrate_site() {
+    local backup_url="$1"
+    local update_urls_flag="$2"
+    
+    echo "🚀 Starting Site Migration 🚀"
+
+    # --- Pre-flight Checks ---
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! command -v wget &>/dev/null; then echo "❌ Error: wget not found." >&2; return 1; fi
+    if ! command -v unzip &>/dev/null; then echo "❌ Error: unzip not found." >&2; return 1; fi
+    if ! command -v tar &>/dev/null; then echo "❌ Error: tar not found." >&2; return 1; fi
+
+    local home_directory; home_directory=$(pwd)
+    local wp_home; wp_home=$( wp option get home --skip-themes --skip-plugins )
+    if [[ "$wp_home" != "http"* ]]; then
+        echo "❌ Error: WordPress not found in current directory. Migration cancelled." >&2
+        return 1
+    fi
+    
+    # --- Find Private Directory ---
+    local private_dir=""
+    if [ -d "_wpeprivate" ]; then private_dir="${home_directory}/_wpeprivate"; fi
+    if [ -d "../private" ]; then private_dir=$(cd ../private && pwd); fi
+    if [ -d "../tmp" ]; then private_dir=$(cd ../tmp && pwd); fi
+    cd "$home_directory" #  Ensure we are back
+    if [[ -z "$private_dir" ]]; then
+        echo "❌ Error: Can't locate a private folder. Migration cancelled." >&2
+        return 1
+    fi
+    
+    # --- Download and Extract Backup ---
+    local timedate; timedate=$(date +'%Y-%m-%d-%H%M%S')
+    local restore_dir="${private_dir}/restore_${timedate}"
+    mkdir -p "$restore_dir"
+    cd "$restore_dir" || return 1
+    
+    local local_file_name; local_file_name=$(basename "$backup_url")
+
+    #  Handle special URLs
+    if [[ "$backup_url" == *"admin-ajax.php"* ]]; then
+      echo "ℹ️ Backup Buddy URL found, transforming..."
+      backup_url=${backup_url/wp-admin\/admin-ajax.php?action=pb_backupbuddy_backupbuddy&function=download_archive&backupbuddy_backup=/wp-content\/uploads\/backupbuddy_backups/}
+    fi
+    if [[ "$backup_url" == *"dropbox.com"* && "$backup_url" != *"dl=1" ]]; then
+      echo "ℹ️ Dropbox URL found, adding dl=1..."
+      backup_url=${backup_url/&dl=0/&dl=1}
+    fi
+    
+    #  Download or use local file
+    if [ ! -f "${private_dir}/${local_file_name}" ]; then
+      echo "Downloading from $backup_url..."
+      wget --no-check-certificate --progress=bar:force:noscroll -O "backup_file" "$backup_url"
+      if [ $? -ne 0 ]; then echo "❌ Error: Download failed."; cd "$home_directory"; return 1; fi
+    else
+      echo "ℹ️ Local file '${local_file_name}' found. Using it."
+      mv "${private_dir}/${local_file_name}" ./backup_file
+    fi
+
+    #  Extract based on extension
+    echo "Extracting backup..."
+    if [[ "$backup_url" == *".zip"* || "$local_file_name" == *".zip"* ]]; then
+        unzip -q -o backup_file -x "__MACOSX/*" "cgi-bin/*"
+    elif [[ "$backup_url" == *".tar.gz"* || "$local_file_name" == *".tar.gz"* ]]; then
+        tar xzf backup_file
+    elif [[ "$backup_url" == *".tar"* || "$local_file_name" == *".tar"* ]]; then
+        tar xf backup_file
+    else #  Assume zip if no extension matches
+        echo "ℹ️ No clear extension, assuming .zip format."
+        unzip -q -o backup_file -x "__MACOSX/*" "cgi-bin/*"
+    fi
+    rm -f backup_file
+
+    # --- Migrate Files ---
+    local wordpresspath; wordpresspath=$( find . -type d -name 'wp-content' -print -quit )
+    if [[ -z "$wordpresspath" ]]; then
+      echo "❌ Error: Can't find wp-content/ in backup. Migration cancelled."; cd "$home_directory"; return 1
+    fi
+
+    echo "Migrating files..."
+    #  A safer way to migrate content is using rsync
+    rsync -av --remove-source-files "${wordpresspath}/" "${home_directory}/wp-content/"
+    
+    #  Find and move non-default root files
+    local backup_root_dir; backup_root_dir=$(dirname "$wordpresspath")
+    cd "$backup_root_dir" || return 1
+    local default_files=( index.php license.txt readme.html wp-activate.php wp-app.php wp-blog-header.php wp-comments-post.php wp-config-sample.php wp-cron.php wp-links-opml.php wp-load.php wp-login.php wp-mail.php wp-pass.php wp-register.php wp-settings.php wp-signup.php wp-trackback.php xmlrpc.php wp-admin wp-config.php wp-content wp-includes )
+    for item in *; do
+        is_default=false
+        for default in "${default_files[@]}"; do
+            if [[ "$item" == "$default" ]]; then is_default=true; break; fi
+        done
+        if ! $is_default; then
+            echo "Moving root item: $item"
+            mv -f "$item" "${home_directory}/"
+        fi
+    done
+    cd "$home_directory"
+
+    # --- Database Migration ---
+    local database; database=$(find "$restore_dir" -type f -name '*.sql' -printf '%T@ %p\n' | sort -n | tail -1 | cut -f2- -d" ")
+    if [[ -z "$database" || ! -f "$database" ]]; then
+        echo "⚠️ Warning: No .sql file found in backup. Skipping database import.";
+    else
+        echo "Importing database from $database..."
+        local search_privacy; search_privacy=$( wp option get blog_public --skip-plugins --skip-themes )
+        wp db reset --yes --skip-plugins --skip-themes
+        wp db import "$database" --skip-plugins --skip-themes
+        wp cache flush --skip-plugins --skip-themes
+        wp option update blog_public "$search_privacy" --skip-plugins --skip-themes
+
+        #  URL updates
+        local wp_home_imported; wp_home_imported=$( wp option get home --skip-plugins --skip-themes )
+        if [[ "$update_urls_flag" == "true" && "$wp_home_imported" != "$wp_home" ]]; then
+            echo "Updating URLs from $wp_home_imported to $wp_home..."
+            wp search-replace "$wp_home_imported" "$wp_home" --all-tables --report-changed-only --skip-plugins --skip-themes
+        fi
+    fi
+
+    # --- Cleanup & Final Steps ---
+    echo "Performing cleanup and final optimizations..."
+    local plugins_to_remove=( backupbuddy wordfence w3-total-cache wp-super-cache ewww-image-optimizer )
+    for plugin in "${plugins_to_remove[@]}"; do
+        if wp plugin is-installed "$plugin" --skip-plugins --skip-themes &>/dev/null; then
+            echo "Removing plugin: $plugin"
+            wp plugin delete "$plugin" --skip-plugins --skip-themes
+        fi
+    done
+    
+    #  Convert tables to InnoDB
+    local alter_queries; alter_queries=$(wp db query "SELECT CONCAT('ALTER TABLE ', TABLE_SCHEMA,'.', TABLE_NAME, ' ENGINE=InnoDB;') FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA=DATABASE()" --skip-column-names --skip-plugins --skip-themes)
+    if [[ -n "$alter_queries" ]]; then
+        echo "Converting MyISAM tables to InnoDB..."
+        echo "$alter_queries" | wp db query --skip-plugins --skip-themes
+    fi
+
+    wp rewrite flush --skip-plugins --skip-themes
+    if wp plugin is-active woocommerce --skip-plugins --skip-themes &>/dev/null; then
+        wp wc tool run regenerate_product_attributes_lookup_table --user=1 --skip-plugins --skip-themes
+    fi
+    
+    find . -type d -exec chmod 755 {} \;
+    find . -type f -exec chmod 644 {} \;
+    
+    #  Clean up restore directory
+    rm -rf "$restore_dir"
+    
+    echo "✅ Site migration complete!"
+}
