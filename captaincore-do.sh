@@ -404,7 +404,60 @@ function main() {
 # --- Sourced Command Functions ---
 # The following functions are sourced from the 'commands/' directory.
 
-
+# --------------------------------------
+#  Creates a full backup of a WordPress site (files + database).
+# --------------------------------------
+function full_backup() {
+    local target_folder="$1"
+    if [ -z "$target_folder" ]; then echo "Error: Please provide a folder path." >&2; echo "Usage: captaincore-do backup <folder>" >&2; return 1; fi
+    if ! command -v realpath &> /dev/null; then echo "Error: 'realpath' command not found. Please install it." >&2; return 1; fi
+    if [ ! -d "$target_folder" ]; then echo "Error: Folder '$target_folder' not found." >&2; return 1; fi
+    
+    #  Resolve the absolute path to handle cases like "."
+    local full_target_path; full_target_path=$(realpath "$target_folder")
+    local parent_dir; parent_dir=$(dirname "$full_target_path")
+    local site_dir_name; site_dir_name=$(basename "$full_target_path")
+    
+    local today; today=$(date +"%Y-%m-%d"); local random; random=$(head /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 7); local backup_filename="${today}_${random}.zip"; local original_dir; original_dir=$(pwd)
+    
+    #  Change to the parent directory for consistent relative paths in the zip
+    cd "$parent_dir" || return 1
+    
+    if ! command -v wp &> /dev/null; then echo "Error: wp-cli is not installed." >&2; cd "$original_dir"; return 1; fi
+    local home_url; home_url=$(wp option get home --path="$site_dir_name" --skip-plugins --skip-themes); local name; name=$(wp option get blogname --path="$site_dir_name" --skip-plugins --skip-themes); local database_file="db_export.sql"
+    
+    echo "Exporting database for '$name'...";
+    if ! wp db export "$site_dir_name/$database_file" --path="$site_dir_name" --add-drop-table --default-character-set=utf8mb4; then
+        echo "Error: Database export failed." >&2
+        cd "$original_dir"
+        return 1
+    fi
+    
+    echo "Creating zip archive...";
+    #  Create the zip in the parent directory, zipping the site directory
+    if ! zip -r "$backup_filename" "$site_dir_name" -x "$site_dir_name/wp-content/updraft/*" > /dev/null; then
+        echo "Error: Failed to zip files." >&2
+        rm -f "$site_dir_name/$database_file"
+        cd "$original_dir"
+        return 1
+    fi
+    
+    #  Add wp-config.php if it exists in the site directory
+    if [ -f "$site_dir_name/wp-config.php" ]; then
+        zip "$backup_filename" "$site_dir_name/wp-config.php" > /dev/null
+    fi
+    
+    #  Cleanup and Final Steps
+    local size; size=$(ls -lh "$backup_filename" | awk '{print $5}')
+    rm -f "$site_dir_name/$database_file"
+    mv "$backup_filename" "$site_dir_name/"
+    
+    local final_backup_location="$site_dir_name/$backup_filename"
+    
+    cd "$original_dir"
+    
+    echo "-----------------------------------------------------"; echo "✅ Full site backup complete!"; echo "   Name: $name"; echo "   Location: $final_backup_location"; echo "   Size: $size"; echo "   URL: ${home_url}/${backup_filename}"; echo "-----------------------------------------------------"; echo "When done, remember to remove the backup file."; echo "rm -f \"$full_target_path/$backup_filename\""
+}
 # --------------------------------------
 #  Performs a WordPress database-only backup to a secure, private directory.
 # --------------------------------------
@@ -484,14 +537,11 @@ function run_dump() {
     local INPUT_PATTERN="$1"
 
     # --- 2. Determine Paths and Names ---
-    # Extract the directory to search in (e.g., "wp-content/plugins/jetpack")
     local SEARCH_DIR
     SEARCH_DIR=$(dirname "$INPUT_PATTERN")
-    # Extract the file name pattern (e.g., "*.php")
     local FILE_PATTERN
     FILE_PATTERN=$(basename "$INPUT_PATTERN")
 
-    # Use the directory's name for the output file (e.g., "jetpack")
     local OUTPUT_BASENAME
     OUTPUT_BASENAME=$(basename "$SEARCH_DIR")
     if [ "$OUTPUT_BASENAME" == "." ]; then
@@ -500,32 +550,24 @@ function run_dump() {
     local OUTPUT_FILE="${OUTPUT_BASENAME}.txt"
 
     # --- 3. Process Files ---
-    # Ensure the output file is empty before we start
     > "$OUTPUT_FILE"
 
     echo "Searching in '$SEARCH_DIR' for files matching '$FILE_PATTERN'..."
 
-    # Find all files recursively (-type f) matching the name pattern.
-    # The -print0 and `read -d ''` combo is the safest way to handle
-    # filenames that might contain spaces or special characters.
-    find "$SEARCH_DIR" -type f -name "$FILE_PATTERN" -print0 | while IFS= read -r -d '' file; do
-        # Append a header with the file path to the output file
+    # --- FIX: Added '-not -name "$OUTPUT_FILE"' to exclude the output file from the search ---
+    find "$SEARCH_DIR" -type f -name "$FILE_PATTERN" -not -name "$OUTPUT_FILE" -print0 | while IFS= read -r -d '' file; do
         echo "--- File: $file ---" >> "$OUTPUT_FILE"
-        # Append the content of the file
         cat "$file" >> "$OUTPUT_FILE"
-        # Add two newlines for separation between files
         echo -e "\n" >> "$OUTPUT_FILE"
     done
 
     # --- 4. Final Report ---
-    # Check if the output file has content (-s checks if size is > 0)
     if [ ! -s "$OUTPUT_FILE" ]; then
         echo "Warning: No files found matching the pattern. No dump file created."
-        rm "$OUTPUT_FILE" # Clean up the empty file
+        rm "$OUTPUT_FILE"
         return 0
     fi
 
-    # Get the human-readable size of the generated file and trim whitespace
     local FILE_SIZE
     FILE_SIZE=$(du -h "$OUTPUT_FILE" | cut -f1 | xargs)
 
