@@ -12,14 +12,11 @@ function run_dump() {
     local INPUT_PATTERN="$1"
 
     # --- 2. Determine Paths and Names ---
-    # Extract the directory to search in (e.g., "wp-content/plugins/jetpack")
     local SEARCH_DIR
     SEARCH_DIR=$(dirname "$INPUT_PATTERN")
-    # Extract the file name pattern (e.g., "*.php")
     local FILE_PATTERN
     FILE_PATTERN=$(basename "$INPUT_PATTERN")
 
-    # Use the directory's name for the output file (e.g., "jetpack")
     local OUTPUT_BASENAME
     OUTPUT_BASENAME=$(basename "$SEARCH_DIR")
     if [ "$OUTPUT_BASENAME" == "." ]; then
@@ -28,32 +25,24 @@ function run_dump() {
     local OUTPUT_FILE="${OUTPUT_BASENAME}.txt"
 
     # --- 3. Process Files ---
-    # Ensure the output file is empty before we start
     > "$OUTPUT_FILE"
 
     echo "Searching in '$SEARCH_DIR' for files matching '$FILE_PATTERN'..."
 
-    # Find all files recursively (-type f) matching the name pattern.
-    # The -print0 and `read -d ''` combo is the safest way to handle
-    # filenames that might contain spaces or special characters.
-    find "$SEARCH_DIR" -type f -name "$FILE_PATTERN" -print0 | while IFS= read -r -d '' file; do
-        # Append a header with the file path to the output file
+    # --- FIX: Added '-not -name "$OUTPUT_FILE"' to exclude the output file from the search ---
+    find "$SEARCH_DIR" -type f -name "$FILE_PATTERN" -not -name "$OUTPUT_FILE" -print0 | while IFS= read -r -d '' file; do
         echo "--- File: $file ---" >> "$OUTPUT_FILE"
-        # Append the content of the file
         cat "$file" >> "$OUTPUT_FILE"
-        # Add two newlines for separation between files
         echo -e "\n" >> "$OUTPUT_FILE"
     done
 
     # --- 4. Final Report ---
-    # Check if the output file has content (-s checks if size is > 0)
     if [ ! -s "$OUTPUT_FILE" ]; then
         echo "Warning: No files found matching the pattern. No dump file created."
-        rm "$OUTPUT_FILE" # Clean up the empty file
+        rm "$OUTPUT_FILE"
         return 0
     fi
 
-    # Get the human-readable size of the generated file and trim whitespace
     local FILE_SIZE
     FILE_SIZE=$(du -h "$OUTPUT_FILE" | cut -f1 | xargs)
 
