@@ -1,0 +1,60 @@
+# --------------------------------------
+#  Cleans up inactive themes.
+# --------------------------------------
+function clean_themes() {
+    # --- Pre-flight checks ---
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! wp core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+
+    echo "🔎 Finding the latest default WordPress theme to preserve..."
+    latest_default_theme=$(cat <<'PHP_SCRIPT' | wp eval-file -
+<?php
+$response = wp_remote_get(
+  'https://api.wordpress.org/themes/info/1.2/?action=query_themes&request[author]=wordpressdotorg&request[per_page]=100'
+);
+if (is_wp_error($response)) {
+  exit(1);
+}
+$data = json_decode(wp_remote_retrieve_body($response));
+// Rewritten to avoid the ! character
+if (is_null($data) || isset($data->themes) === false) {
+  exit(1);
+}
+$twentyThemes = [];
+foreach ($data->themes as $theme) {
+  if (isset($theme->slug) && str_starts_with($theme->slug, 'twenty')) {
+    $twentyThemes[] = $theme->slug;
+  }
+}
+if (empty($twentyThemes)) {
+  exit(1);
+}
+echo $twentyThemes[0];
+PHP_SCRIPT
+)
+
+    if [ $? -ne 0 ] || [ -z "$latest_default_theme" ]; then
+      echo "❌ Error: Could not determine the latest default theme. Aborting." >&2
+      return 1
+    fi
+    echo "✅ The latest default theme is '$latest_default_theme'. This will be preserved."
+
+    inactive_themes=($(wp theme list --status=inactive --field=name --skip-plugins --skip-themes))
+    if [ ${#inactive_themes[@]} -eq 0 ]; then
+      echo "👍 No inactive themes found to process. All done!"
+      return 0
+    fi
+
+    echo "🚀 Processing ${#inactive_themes[@]} inactive themes..."
+    for theme in "${inactive_themes[@]}"; do
+      # Check if the current inactive theme is the one we want to keep
+      if [[ "$theme" == "$latest_default_theme" ]]; then
+        echo "⚪️ Keeping inactive default theme: $theme"
+      else
+        echo "❌ Deleting inactive theme: $theme"
+        wp theme delete "$theme"
+      fi
+    done
+
+    echo "✨ Cleanup complete."
+}

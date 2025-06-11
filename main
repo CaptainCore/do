@@ -132,6 +132,14 @@ function show_command_help() {
             echo
             echo "Usage: captaincore-do backup-db"
             ;;
+        clean)
+            echo "Cleans up unused WordPress components like themes and plugins."
+            echo
+            echo "Usage: captaincore-do clean <subcommand>"
+            echo
+            echo "Subcommands:"
+            echo "  themes    Deletes all inactive themes except for the latest default WordPress theme."
+            ;;
         db-check-autoload)
             echo "Checks the size and top 25 largest autoloaded options in the DB."
             echo
@@ -234,6 +242,7 @@ function show_usage() {
     echo "Available Commands:"
     echo "  backup              Creates a full backup (files + DB) of a WordPress site."
     echo "  backup-db           Performs a DB-only backup to a secure private directory."
+    echo "  clean               Removes unused items like inactive themes."
     echo "  convert-to-webp     Finds and converts large images (JPG, PNG) to WebP format."
     echo "  db-check-autoload   Checks the size of autoloaded options in the database."
     echo "  db-optimize         Converts all MyISAM database tables to the InnoDB engine."
@@ -357,6 +366,18 @@ function main() {
             ;;
         backup-db)
             db_backup
+            ;;
+        clean)
+            local arg1="${positional_args[1]}"
+            case "$arg1" in
+                themes)
+                    clean_themes
+                    ;;
+                *)
+                    show_command_help "clean"
+                    exit 0
+                    ;;
+            esac
             ;;
         db-check-autoload)
             db_check_autoload
