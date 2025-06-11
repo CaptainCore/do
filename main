@@ -137,20 +137,25 @@ function show_command_help() {
             echo
             echo "Usage: captaincore-do db-check-autoload"
             ;;
+        db-optimize)
+            echo "Converts all MyISAM database tables to the InnoDB engine."
+            echo
+            echo "Usage: captaincore-do db-optimize"
+            ;;
         dump)
-            echo "Dumps the content of files matching a pattern into a single text file." 
+            echo "Dumps the content of files matching a pattern into a single text file."
             echo
             echo "Usage: captaincore-do dump \"<pattern>\" [-x <exclude_pattern_1>] [-x <exclude_pattern_2>]..."
             echo
             echo "Arguments:"
-            echo "  <pattern>   (Required) The path and file pattern to search for, enclosed in quotes." 
+            echo "  <pattern>   (Required) The path and file pattern to search for, enclosed in quotes."
             echo
             echo "Flags:"
             echo "  -x <pattern>  (Optional) A file or directory pattern to exclude. Can be used multiple times."
             echo "                To exclude a directory, the pattern MUST end with a forward slash (e.g., 'my-dir/')."
             echo
             echo "Examples:"
-            echo "  captaincore-do dump \"wp-content/plugins/my-plugin/**/*.php\"" 
+            echo "  captaincore-do dump \"wp-content/plugins/my-plugin/**/*.php\""
             echo "  captaincore-do dump \"*\" -x \"*.log\" -x \"node_modules/\""
             ;;
         convert-to-webp)
@@ -231,6 +236,7 @@ function show_usage() {
     echo "  backup-db           Performs a DB-only backup to a secure private directory."
     echo "  convert-to-webp     Finds and converts large images (JPG, PNG) to WebP format."
     echo "  db-check-autoload   Checks the size of autoloaded options in the database."
+    echo "  db-optimize         Converts all MyISAM database tables to the InnoDB engine."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server access logs in real-time with top IP/status hits."
@@ -354,6 +360,9 @@ function main() {
             ;;
         db-check-autoload)
             db_check_autoload
+            ;;
+        db-optimize)
+            db_optimize
             ;;
         convert-to-webp)
             convert_to_webp

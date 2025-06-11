@@ -1,0 +1,37 @@
+# --------------------------------------
+#  Converts all MyISAM database tables to InnoDB.
+# --------------------------------------
+function db_optimize() {
+    # --- Pre-flight checks ---
+    if ! command -v wp &>/dev/null; then echo "Error: WP-CLI not found." >&2; return 1; fi
+    if ! wp core is-installed --quiet; then echo "Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+
+    echo "Checking for MyISAM tables to convert to InnoDB..."
+
+    # Get a list of tables to convert
+    local myisam_tables
+    myisam_tables=$(wp db query "SELECT TABLE_NAME FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names)
+
+    if [[ -z "$myisam_tables" ]]; then
+        echo "✅ All tables are already using the InnoDB engine. No optimization needed."
+        return 0
+    fi
+
+    echo "Found the following MyISAM tables to convert:"
+    echo "$myisam_tables"
+    echo ""
+    echo "Converting tables to InnoDB..."
+
+    # Generate and execute the ALTER queries by piping them to another wp-cli command
+    wp db query "SELECT CONCAT('ALTER TABLE \`', TABLE_NAME, '\` ENGINE=InnoDB;') FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names | wp db query
+
+    if [ $? -eq 0 ]; then
+      echo ""
+      echo "✅ Successfully converted the following tables to InnoDB:"
+      echo "$myisam_tables"
+    else
+      echo ""
+      echo "‚ùå An error occurred during the conversion."
+      return 1
+    fi
+}
