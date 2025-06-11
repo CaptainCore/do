@@ -3,13 +3,16 @@
 # --------------------------------------
 function run_dump() {
     # --- 1. Validate Input ---
-    if [ -z "$1" ]; then
+    local INPUT_PATTERN="$1"
+    shift
+    local exclude_patterns=("$@")
+
+    if [ -z "$INPUT_PATTERN" ];
+    then
         echo "Error: No input pattern provided." >&2
-        echo "Usage: captaincore-do dump \"<path/to/folder/*.extension>\"" >&2
+        echo "Usage: captaincore-do dump \"<path/to/folder/*.extension>\" [-x <exclude_pattern>]..." >&2
         return 1
     fi
-
-    local INPUT_PATTERN="$1"
 
     # --- 2. Determine Paths and Names ---
     local SEARCH_DIR
@@ -28,9 +31,32 @@ function run_dump() {
     > "$OUTPUT_FILE"
 
     echo "Searching in '$SEARCH_DIR' for files matching '$FILE_PATTERN'..."
+    if [ ${#exclude_patterns[@]} -gt 0 ]; then
+        echo "Excluding user-defined patterns: ${exclude_patterns[*]}"
+    fi
+    echo "Automatically excluding: .git directory contents"
 
-    # --- FIX: Added '-not -name "$OUTPUT_FILE"' to exclude the output file from the search ---
-    find "$SEARCH_DIR" -type f -name "$FILE_PATTERN" -not -name "$OUTPUT_FILE" -print0 | while IFS= read -r -d '' file; do
+    # Dynamically build the find command
+    local find_cmd=("find" "$SEARCH_DIR" "-type" "f" "-name" "$FILE_PATTERN")
+
+    # Add user-defined exclusions
+    for pattern in "${exclude_patterns[@]}"; do
+        if [[ "$pattern" == */ ]]; then
+            # For directories (pattern ends with /), use -path
+            local dir_pattern=${pattern%/} # remove trailing slash
+            find_cmd+=("-not" "-path" "*/$dir_pattern/*")
+        else
+            # For files, use -name
+            find_cmd+=("-not" "-name" "$pattern")
+        fi
+    done
+
+    # Add automatic exclusions for the output file and .git directory
+    find_cmd+=("-not" "-name" "$OUTPUT_FILE")
+    find_cmd+=("-not" "-path" "*/.git/*")
+
+    # Execute the find command
+    "${find_cmd[@]}" -print0 | while IFS= read -r -d '' file; do
         echo "--- File: $file ---" >> "$OUTPUT_FILE"
         cat "$file" >> "$OUTPUT_FILE"
         echo -e "\n" >> "$OUTPUT_FILE"

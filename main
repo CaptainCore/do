@@ -98,8 +98,7 @@ function setup_cwebp() {
     rm -f "${cwebp_tarball}"
 
     #  Final check
-    if [ -f "$cwebp_executable" ] && "$cwebp_executable" -version &> /dev/null;
-        then
+    if [ -f "$cwebp_executable" ] && "$cwebp_executable" -version &> /dev/null; then
         echo "'cwebp' installed successfully." >&2
         CWEBP_CMD="$cwebp_executable"
     else
@@ -124,7 +123,7 @@ function show_command_help() {
     #  Display help text based on the command provided.
     case "$cmd" in
         backup)
-            echo "Creates a full backup (files + DB) of a WordPress site." 
+            echo "Creates a full backup (files + DB) of a WordPress site."
             echo
             echo "Usage: captaincore-do backup <folder>"
             ;;
@@ -139,15 +138,20 @@ function show_command_help() {
             echo "Usage: captaincore-do db-check-autoload"
             ;;
         dump)
-            echo "Dumps the content of files matching a pattern into a single text file."
+            echo "Dumps the content of files matching a pattern into a single text file." 
             echo
-            echo "Usage: captaincore-do dump \"<path/to/folder/*.extension>\""
+            echo "Usage: captaincore-do dump \"<pattern>\" [-x <exclude_pattern_1>] [-x <exclude_pattern_2>]..."
             echo
             echo "Arguments:"
-            echo "  <pattern>   (Required) The path and file pattern to search for, enclosed in quotes."
+            echo "  <pattern>   (Required) The path and file pattern to search for, enclosed in quotes." 
             echo
-            echo "Example:"
-            echo "  captaincore-do dump \"wp-content/plugins/my-plugin/**/*.php\""
+            echo "Flags:"
+            echo "  -x <pattern>  (Optional) A file or directory pattern to exclude. Can be used multiple times."
+            echo "                To exclude a directory, the pattern MUST end with a forward slash (e.g., 'my-dir/')."
+            echo
+            echo "Examples:"
+            echo "  captaincore-do dump \"wp-content/plugins/my-plugin/**/*.php\"" 
+            echo "  captaincore-do dump \"*\" -x \"*.log\" -x \"node_modules/\""
             ;;
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
@@ -280,6 +284,7 @@ function main() {
     local wp_content_flag=""
     local update_urls_flag=""
     local now_flag=""
+    local exclude_patterns=() # Array for exclude patterns
     local positional_args=() #  To store commands and their direct arguments
     
     while [[ $# -gt 0 ]]; do
@@ -312,6 +317,15 @@ function main() {
           update_urls_flag=true
           shift
           ;;
+        -x) # Exclude flag
+          if [[ -n "$2" ]]; then
+            exclude_patterns+=("$2")
+            shift 2 # past flag and value
+          else
+            echo "Error: -x flag requires an argument." >&2
+            exit 1
+          fi
+          ;;
         -*)
           #  This will catch unknown flags like --foo
           echo "Error: Unknown flag: $1" >&2
@@ -328,14 +342,12 @@ function main() {
 
     #  The first positional argument is the main command.
     local command="${positional_args[0]}"
-    local arg1="${positional_args[1]}" 
-    local arg2="${positional_args[2]}"
 
     # --- Command Router ---
     #  This routes to the correct function based on the parsed command.
     case "$command" in
         backup)
-            full_backup "$arg1"
+            full_backup "${positional_args[1]}"
             ;;
         backup-db)
             db_backup
@@ -348,14 +360,13 @@ function main() {
             ;;
         dump)
             # There should be exactly 2 positional args total: 'dump' and the pattern.
-            # If there are more, the shell likely expanded a wildcard.
-            if [ ${#positional_args[@]} -gt 2 ]; then
-                echo -e "Error: Too many arguments. It's likely your pattern was expanded by the shell." >&2
-                echo "Please wrap the pattern in double quotes to prevent this." >&2
-                echo -e "\n  Example: captaincore-do dump \"wp-content/plugins/my-plugin/*.php\"" >&2
+            if [ ${#positional_args[@]} -ne 2 ]; then
+                echo -e "Error: Incorrect number of arguments for 'dump'. It's likely your pattern was expanded by the shell." >&2
+                echo "Please wrap the input pattern in double quotes." >&2
+                echo -e "\n  Usage: captaincore-do dump \"<pattern>\" [-x <exclude1>...]" >&2
                 return 1
             fi
-            run_dump "${positional_args[1]}"
+            run_dump "${positional_args[1]}" "${exclude_patterns[@]}"
             ;;
         migrate)
             if [[ -z "$url_flag" ]]; then
@@ -375,6 +386,7 @@ function main() {
             identify_slow_plugins
             ;;
         suspend)
+            local arg1="${positional_args[1]}" 
             case "$arg1" in
                 activate)
                     suspend_activate "$name_flag" "$link_flag" "$wp_content_flag"
