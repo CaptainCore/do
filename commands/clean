@@ -58,3 +58,15 @@ PHP_SCRIPT
 
     echo "✨ Cleanup complete."
 }
+
+# --------------------------------------
+#  Analyzes disk usage using rclone.
+# --------------------------------------
+function clean_disk() {
+    echo "🚀 Launching interactive disk usage analysis..."
+    if ! setup_rclone; then
+        echo "Aborting analysis: rclone setup failed." >&2
+        return 1
+    fi
+    "$RCLONE_CMD" ncdu .
+}
