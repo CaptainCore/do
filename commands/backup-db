@@ -1,6 +1,6 @@
-# --------------------------------------
+# ----------------------------------------------------
 #  Performs a WordPress database-only backup to a secure, private directory.
-# --------------------------------------
+# ----------------------------------------------------
 function db_backup() {
     echo "Starting database-only backup..."
     local home_directory; home_directory=$(pwd); local private_directory=""

@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# --------------------------------------
+# ----------------------------------------------------
 #  Command: captaincore-do
 #  Description: A collection of useful command-line utilities for managing WordPress sites.
 #  Author: Austin Ginder
 #  License: MIT
-# --------------------------------------
+# ----------------------------------------------------
 
 # --- Global Variables ---
 CAPTAINCORE_DO_VERSION="1.0"
@@ -17,9 +17,9 @@ CWEBP_CMD=""
 
 # --- Helper Functions ---
 
-# --------------------------------------
+# ----------------------------------------------------
 #  Checks for and installs 'gum' if not present. Sets GUM_CMD on success.
-# --------------------------------------
+# ----------------------------------------------------
 function setup_gum() {
     #  Return if already found
     if [[ -n "$GUM_CMD" ]]; then return 0; fi
@@ -64,9 +64,9 @@ function setup_gum() {
     cd - > /dev/null
 }
 
-# --------------------------------------
+# ----------------------------------------------------
 #  Checks for and installs 'cwebp' if not present. Sets CWEBP_CMD on success.
-# --------------------------------------
+# ----------------------------------------------------
 function setup_cwebp() {
     #  Return if already found
     if [[ -n "$CWEBP_CMD" ]]; then return 0; fi
@@ -110,10 +110,10 @@ function setup_cwebp() {
     cd - > /dev/null
 }
 
-# --------------------------------------
+# ----------------------------------------------------
 #  Checks for and installs 'rclone' if not present.
 #  Sets RCLONE_CMD on success.
-# --------------------------------------
+# ----------------------------------------------------
 function setup_rclone() {
     #  Return if already found
     if [[ -n "$RCLONE_CMD" ]]; then return 0; fi
@@ -159,9 +159,9 @@ function setup_rclone() {
     cd - > /dev/null
 }
 
-# --------------------------------------
+# ----------------------------------------------------
 #  Displays detailed help for a specific command.
-# --------------------------------------
+# ----------------------------------------------------
 function show_command_help() {
     local cmd="$1"
     #  If no command is specified, show the general usage.
@@ -279,9 +279,9 @@ function show_command_help() {
     esac
 }
 
-# --------------------------------------
+# ----------------------------------------------------
 #  Displays the main help and usage information.
-# --------------------------------------
+# ----------------------------------------------------
 function show_usage() {
     echo "CaptainCore Do (v$CAPTAINCORE_DO_VERSION)"
     echo "--------------------------"

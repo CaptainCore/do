@@ -1,7 +1,7 @@
-# --------------------------------------
+# ----------------------------------------------------
 #  Deactivates a suspend message by removing the mu-plugin.
 #  (Formerly site_activate)
-# --------------------------------------
+# ----------------------------------------------------
 function suspend_deactivate() {
     local wp_content="$1"
 
@@ -30,10 +30,10 @@ function suspend_deactivate() {
     fi
 }
 
-# --------------------------------------
+# ----------------------------------------------------
 #  Activates a suspend message by adding an mu-plugin.
 #  (Formerly site_deactivate)
-# --------------------------------------
+# ----------------------------------------------------
 function suspend_activate() {
     local name="$1"
     local link="$2"

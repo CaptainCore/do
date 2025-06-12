@@ -1,6 +1,6 @@
-# --------------------------------------
+# ----------------------------------------------------
 #  Finds large images and converts them to the WebP format.
-# --------------------------------------
+# ----------------------------------------------------
 function convert_to_webp() {
     echo "🚀 Starting WebP Conversion Process 🚀"
     if ! setup_cwebp; then

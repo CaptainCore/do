@@ -1,6 +1,6 @@
-# --------------------------------------
+# ----------------------------------------------------
 #  Cleans up inactive themes.
-# --------------------------------------
+# ----------------------------------------------------
 function clean_themes() {
     # --- Pre-flight checks ---
     if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
@@ -59,9 +59,9 @@ PHP_SCRIPT
     echo "✨ Cleanup complete."
 }
 
-# --------------------------------------
+# ----------------------------------------------------
 #  Analyzes disk usage using rclone.
-# --------------------------------------
+# ----------------------------------------------------
 function clean_disk() {
     echo "🚀 Launching interactive disk usage analysis..."
     if ! setup_rclone; then

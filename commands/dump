@@ -1,6 +1,6 @@
-# --------------------------------------
+# ----------------------------------------------------
 #  Dumps the content of files matching a pattern into a single text file.
-# --------------------------------------
+# ----------------------------------------------------
 function run_dump() {
     # --- 1. Validate Input ---
     local INPUT_PATTERN="$1"

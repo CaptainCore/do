@@ -1,6 +1,6 @@
-# --------------------------------------
+# ----------------------------------------------------
 #  Identifies plugins that may be slowing down WP-CLI command execution.
-# --------------------------------------
+# ----------------------------------------------------
 function identify_slow_plugins() {
     _get_wp_execution_time() { local output; output=$(command wp "$@" --debug 2>&1); echo "$output" | perl -ne '/Debug \(bootstrap\): Running command: .+\(([^s]+s)/ && print $1'; }
     if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI (wp command) not found." >&2; return 1; fi

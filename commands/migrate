@@ -1,9 +1,9 @@
-# --------------------------------------
+# ----------------------------------------------------
 #  Migrates a site from a backup URL or local file.
 #  Arguments:
 #    $1 - The URL/path for the backup file.
 #    $2 - A flag indicating whether to update URLs.
-# --------------------------------------
+# ----------------------------------------------------
 function migrate_site() {
     local backup_url="$1"
     local update_urls_flag="$2"

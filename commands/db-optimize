@@ -1,6 +1,6 @@
-# --------------------------------------
+# ----------------------------------------------------
 #  Optimizes the database by converting tables to InnoDB, reporting large tables, and cleaning transients.
-# --------------------------------------
+# ----------------------------------------------------
 function db_optimize() {
     # --- Pre-flight checks ---
     if ! command -v wp &>/dev/null; then echo "Error: WP-CLI not found." >&2; return 1; fi 

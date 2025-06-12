@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# --------------------------------------
+# ----------------------------------------------------
 #  Compiler for captaincore-do
 #  Description: Combines the main script and individual command files into a single distributable script.
-# --------------------------------------
+# ----------------------------------------------------
 
 # --- Configuration ---
 # The final, compiled script that will be generated.

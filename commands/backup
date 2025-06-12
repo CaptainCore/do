@@ -1,6 +1,6 @@
-# --------------------------------------
+# ----------------------------------------------------
 #  Creates a full backup of a WordPress site (files + database).
-# --------------------------------------
+# ----------------------------------------------------
 function full_backup() {
     local target_folder="$1"
     if [ -z "$target_folder" ]; then echo "Error: Please provide a folder path." >&2; echo "Usage: captaincore-do backup <folder>" >&2; return 1; fi
