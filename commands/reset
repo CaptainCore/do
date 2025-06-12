@@ -1,0 +1,108 @@
+# --- File: ./commands/reset ---
+# ----------------------------------------------------
+#  Resets the WordPress installation to a clean, default state.
+# ----------------------------------------------------
+function reset_site() {
+    local admin_user="$1"
+    local admin_email="$2"
+
+    # --- Pre-flight Checks ---
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! wp core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! command -v wget &>/dev/null; then echo "❌ Error: wget not found." >&2; return 1; fi
+    if ! command -v unzip &>/dev/null; then echo "❌ Error: unzip not found." >&2; return 1; fi
+    if ! command -v curl &>/dev/null; then echo "❌ Error: curl not found." >&2; return 1; fi
+
+    echo "🚀 Starting WordPress Site Reset 🚀"
+    echo "This is a destructive operation."
+    # A 3-second countdown to allow the user to abort (Ctrl+C)
+    for i in {3..1}; do echo -n "Continuing in $i... "; sleep 1; done; echo
+
+    # --- Gather Info Before Reset ---
+    local url; url=$( wp option get home --skip-plugins --skip-themes )
+    local title; title=$( wp option get blogname --skip-plugins --skip-themes )
+
+    # If admin_email is not supplied, get it from the current installation
+    if [ -z "$admin_email" ]; then
+        admin_email=$(wp option get admin_email --skip-plugins --skip-themes)
+        echo "ℹ️ Admin email not provided. Using existing email: $admin_email"
+    fi
+
+    # --- Perform Reset ---
+    echo "Step 1/9: Resetting the database..."
+    wp db reset --yes --skip-plugins --skip-themes
+
+    echo "Step 2/9: Downloading latest WordPress core..."
+    wp core download --force --skip-plugins --skip-themes
+
+    echo "Step 3/9: Installing WordPress core..."
+    wp core install --url="$url" --title="$title" --admin_user="$admin_user" --admin_email="$admin_email" --skip-plugins --skip-themes
+
+    echo "Step 4/9: Deleting all other themes..."
+    wp theme delete --all --force --skip-plugins --skip-themes
+
+    echo "Step 5/9: Deleting all plugins..."
+    wp plugin delete --all --skip-plugins --skip-themes
+
+     echo "Step 6/9: Finding the latest default WordPress theme..."
+    latest_default_theme=$(cat <<'PHP_SCRIPT' | wp eval-file -
+<?php
+$response = wp_remote_get(
+  'https://api.wordpress.org/themes/info/1.2/?action=query_themes&request[author]=wordpressdotorg&request[per_page]=100'
+);
+if (is_wp_error($response)) {
+  exit(1);
+}
+$data = json_decode(wp_remote_retrieve_body($response));
+// Rewritten to avoid the ! character
+if (is_null($data) || isset($data->themes) === false) {
+  exit(1);
+}
+$twentyThemes = [];
+foreach ($data->themes as $theme) {
+  if (isset($theme->slug) && str_starts_with($theme->slug, 'twenty')) {
+    $twentyThemes[] = $theme->slug;
+  }
+}
+if (empty($twentyThemes)) {
+  exit(1);
+}
+echo $twentyThemes[0];
+PHP_SCRIPT
+)
+
+    if [ $? -ne 0 ] || [ -z "$latest_default_theme" ]; then
+      echo "❌ Error: Could not determine the latest default theme. Aborting reset."  >&2
+      return 1
+    fi
+    echo "✅ Latest default theme is '$latest_default_theme'."
+
+    echo "Step 7/9: Installing and activating '$latest_default_theme'..."
+    wp theme install "$latest_default_theme" --force --activate --skip-plugins --skip-themes
+
+    echo "Step 8/9: Cleaning up directories (mu-plugins, uploads)..."
+    rm -rf wp-content/mu-plugins/
+    mkdir -p wp-content/mu-plugins/
+    rm -rf wp-content/uploads/
+    mkdir -p wp-content/uploads/
+
+    echo "Step 9/9: Installing helper plugins (Kinsta MU, CaptainCore Helper)..."
+    if wget -q https://kinsta.com/kinsta-tools/kinsta-mu-plugins.zip; then
+        unzip -q kinsta-mu-plugins.zip -d wp-content/mu-plugins/
+        rm kinsta-mu-plugins.zip
+        echo "✅ Kinsta MU plugin installed."
+    else
+        echo "⚠️ Warning: Could not download Kinsta MU plugin."
+    fi
+
+    if curl -sSL https://run.captaincore.io/deploy-helper | bash -s; then
+        echo "✅ CaptainCore Helper deployed."
+    else
+        echo "⚠️ Warning: Could not deploy CaptainCore Helper."
+    fi
+
+    echo ""
+    echo "✅ WordPress reset complete!"
+    echo "   URL: $url"
+    echo "   Admin User: $admin_user"
+}

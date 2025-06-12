@@ -238,6 +238,16 @@ function show_command_help() {
             echo "  --top=<number>   The number of top IP/Status combinations to show. Default is 25."
             echo "  --now            Start processing from the end of the log file instead of the beginning."
             ;;
+        reset)
+            echo "Resets the WordPress installation to a default state."
+            echo
+            echo "Usage: captaincore-do reset --admin_user=<username> [--admin_email=<email>]"
+            echo
+            echo "Flags:"
+            echo "  --admin_user=<username>   (Required) The username for the new administrator."
+            echo "  --admin_email=<email>     (Optional) The email for the new administrator."
+            echo "                            Defaults to the current site's admin email."
+            ;;
         reset-permissions)
             echo "Resets file and folder permissions to defaults (755 for dirs, 644 for files)."
             echo
@@ -300,6 +310,7 @@ function show_usage() {
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server access logs in real-time with top IP/status hits."
+    echo "  reset               Resets the WordPress installation to a default state."
     echo "  reset-permissions   Resets file and folder permissions to defaults."
     echo "  slow-plugins        Identifies plugins that may be slowing down WP-CLI."
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
@@ -350,8 +361,10 @@ function main() {
     local wp_content_flag=""
     local update_urls_flag=""
     local now_flag=""
-    local exclude_patterns=() # Array for exclude patterns
-    local positional_args=() #  To store commands and their direct arguments
+    local admin_user_flag=""
+    local admin_email_flag=""
+    local exclude_patterns=()
+    local positional_args=()
     
     while [[ $# -gt 0 ]]; do
       case $1 in
@@ -381,6 +394,14 @@ function main() {
           ;;
         --update-urls)
           update_urls_flag=true
+          shift
+          ;;
+        --admin_user=*)
+          admin_user_flag="${1#*=}"
+          shift
+          ;;
+        --admin_email=*)
+          admin_email_flag="${1#*=}"
           shift
           ;;
         -x) # Exclude flag
@@ -462,6 +483,14 @@ function main() {
             ;;
         monitor)
             monitor_traffic "$top_flag" "$now_flag"
+            ;;
+        reset)
+            if [[ -z "$admin_user_flag" ]]; then
+                echo "Error: The 'reset' command requires the --admin_user=<...> flag." >&2
+                show_command_help "reset"
+                exit 1
+            fi
+            reset_site "$admin_user_flag" "$admin_email_flag"
             ;;
         reset-permissions)
             reset_permissions
