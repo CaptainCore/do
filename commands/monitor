@@ -13,7 +13,7 @@ function monitor_traffic() {
     # --- Configuration ---
     local limit=${limit_arg:-25}
     local log="$HOME/logs/access.log"
-    local initial_lines_to_process=500 # How many lines to look back initially (only used with --now)
+    local initial_lines_to_process=1 # How many lines to look back initially (only used with --now)
     # --- End Configuration ---
 
     if [ ! -f "$log" ]; then
