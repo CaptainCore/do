@@ -1,6 +1,6 @@
 # ----------------------------------------------------
-#  Displays the version of the captaincore-do script.
+#  Displays the version of the _do script.
 # ----------------------------------------------------
 function show_version() {
-    echo "captaincore-do version $CAPTAINCORE_DO_VERSION"
+    echo "_do version $CAPTAINCORE_DO_VERSION"
 }
