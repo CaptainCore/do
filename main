@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ----------------------------------------------------
-#  Command: captaincore-do
+#  Command: _do
 #  Description: A collection of useful command-line utilities for managing WordPress sites.
 #  Author: Austin Ginder
 #  License: MIT
@@ -175,17 +175,17 @@ function show_command_help() {
         backup)
             echo "Creates a full backup (files + DB) of a WordPress site."
             echo
-            echo "Usage: captaincore-do backup <folder>"
+            echo "Usage: _do backup <folder>"
             ;;
         backup-db)
             echo "Performs a DB-only backup to a secure private directory."
             echo
-            echo "Usage: captaincore-do backup-db"
+            echo "Usage: _do backup-db"
             ;;
         clean)
             echo "Cleans up unused WordPress components or analyzes disk usage."
             echo
-            echo "Usage: captaincore-do clean <subcommand>"
+            echo "Usage: _do clean <subcommand>"
             echo
             echo "Subcommands:"
             echo "  themes    Deletes all inactive themes except for the latest default WordPress theme."
@@ -194,17 +194,17 @@ function show_command_help() {
         db-check-autoload)
             echo "Checks the size and top 25 largest autoloaded options in the DB."
             echo
-            echo "Usage: captaincore-do db-check-autoload"
+            echo "Usage: _do db-check-autoload"
             ;;
         db-optimize)
             echo "Converts all MyISAM database tables to the InnoDB engine."
             echo
-            echo "Usage: captaincore-do db-optimize"
+            echo "Usage: _do db-optimize"
             ;;
         dump)
             echo "Dumps the content of files matching a pattern into a single text file."
             echo
-            echo "Usage: captaincore-do dump \"<pattern>\" [-x <exclude_pattern_1>] [-x <exclude_pattern_2>]..."
+            echo "Usage: _do dump \"<pattern>\" [-x <exclude_pattern_1>] [-x <exclude_pattern_2>]..."
             echo
             echo "Arguments:"
             echo "  <pattern>   (Required) The path and file pattern to search for, enclosed in quotes."
@@ -214,25 +214,25 @@ function show_command_help() {
             echo "                To exclude a directory, the pattern MUST end with a forward slash (e.g., 'my-dir/')."
             echo
             echo "Examples:"
-            echo "  captaincore-do dump \"wp-content/plugins/my-plugin/**/*.php\""
-            echo "  captaincore-do dump \"*\" -x \"*.log\" -x \"node_modules/\""
+            echo "  _do dump \"wp-content/plugins/my-plugin/**/*.php\""
+            echo "  _do dump \"*\" -x \"*.log\" -x \"node_modules/\""
             ;;
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
             echo
-            echo "Usage: captaincore-do convert-to-webp"
+            echo "Usage: _do convert-to-webp"
             ;;
         migrate)
             echo "Migrates a site from a backup snapshot."
             echo
-            echo "Usage: captaincore-do migrate --url=<backup-url> [--update-urls]"
+            echo "Usage: _do migrate --url=<backup-url> [--update-urls]"
             echo
             echo "  --update-urls   Update urls to destination WordPress site. Default will keep source urls."
             ;;
         monitor)
             echo "Monitors server access logs in real-time."
             echo
-            echo "Usage: captaincore-do monitor [--top=<number>] [--now]"
+            echo "Usage: _do monitor [--top=<number>] [--now]"
             echo
             echo "Optional Flags:"
             echo "  --top=<number>   The number of top IP/Status combinations to show. Default is 25."
@@ -241,7 +241,7 @@ function show_command_help() {
         reset)
             echo "Resets the WordPress installation to a default state."
             echo
-            echo "Usage: captaincore-do reset --admin_user=<username> [--admin_email=<email>]"
+            echo "Usage: _do reset --admin_user=<username> [--admin_email=<email>]"
             echo
             echo "Flags:"
             echo "  --admin_user=<username>   (Required) The username for the new administrator."
@@ -251,17 +251,17 @@ function show_command_help() {
         reset-permissions)
             echo "Resets file and folder permissions to defaults (755 for dirs, 644 for files)."
             echo
-            echo "Usage: captaincore-do reset-permissions"
+            echo "Usage: _do reset-permissions"
             ;;
         slow-plugins)
             echo "Identifies plugins that may be slowing down WP-CLI."
             echo
-            echo "Usage: captaincore-do slow-plugins"
+            echo "Usage: _do slow-plugins"
             ;;
         suspend)
             echo "Activates or deactivates a suspend message shown to visitors."
             echo
-            echo "Usage: captaincore-do suspend <subcommand> [flags]"
+            echo "Usage: _do suspend <subcommand> [flags]"
             echo
             echo "Subcommands:"
             echo "  activate      Activates the suspend message. Requires --name and --link flags."
@@ -276,9 +276,9 @@ function show_command_help() {
             echo "  --wp-content=<path>         (Optional) Path to wp-content directory. Defaults to 'wp-content'."
             ;;
         version)
-            echo "Displays the current version of the captaincore-do script."
+            echo "Displays the current version of the _do script."
             echo
-            echo "Usage: captaincore-do version"
+            echo "Usage: _do version"
             ;;
         *)
             echo "Error: Unknown command '$cmd' for help." >&2
@@ -293,12 +293,12 @@ function show_command_help() {
 #  Displays the main help and usage information.
 # ----------------------------------------------------
 function show_usage() {
-    echo "CaptainCore Do (v$CAPTAINCORE_DO_VERSION)"
+    echo "CaptainCore _do (v$CAPTAINCORE_DO_VERSION)"
     echo "--------------------------"
-    echo "A collection of useful command-line utilities."
+    echo "A collection of useful command-line utilities for managing WordPress sites."
     echo ""
     echo "Usage:"
-    echo "  captaincore-do <command> [arguments] [--flags]"
+    echo "  _do <command> [arguments] [--flags]"
     echo ""
     echo "Available Commands:"
     echo "  backup              Creates a full backup (files + DB) of a WordPress site."
@@ -314,9 +314,9 @@ function show_usage() {
     echo "  reset-permissions   Resets file and folder permissions to defaults."
     echo "  slow-plugins        Identifies plugins that may be slowing down WP-CLI."
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
-    echo "  version             Displays the current version of the captaincore-do script."
+    echo "  version             Displays the current version of the _do script."
     echo ""
-    echo "Run 'captaincore-do help <command>' for more information on a specific command."
+    echo "Run '_do help <command>' for more information on a specific command."
 }
 
 # --- Main Entry Point and Argument Parser ---
@@ -468,7 +468,7 @@ function main() {
             if [ ${#positional_args[@]} -ne 2 ]; then
                 echo -e "Error: Incorrect number of arguments for 'dump'. It's likely your pattern was expanded by the shell." >&2
                 echo "Please wrap the input pattern in double quotes." >&2
-                echo -e "\n  Usage: captaincore-do dump \"<pattern>\" [-x <exclude1>...]" >&2
+                echo -e "\n  Usage: _do dump \"<pattern>\" [-x <exclude1>...]" >&2
                 return 1
             fi
             run_dump "${positional_args[1]}" "${exclude_patterns[@]}"

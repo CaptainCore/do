@@ -35,13 +35,7 @@ These tools will be downloaded and installed into a `~/private` directory in you
 
 ## Installation
 
-The easiest way to try CaptainCore Do is by defining an alias to [captaincore.io/do](https://captaincore.io/do). That allows you to use `captaincore-do` without actually installing anything. This will last for the duration of your terminal session. 
-
-```bash
-alias captaincore-do='curl -sL https://captaincore.io/do | bash -s'
-```
-
-You can also shorthand the alias. Maybe `_do` fits your style better?
+The easiest way to use CaptainCore Do is by defining an alias to [captaincore.io/do](https://captaincore.io/do). That allows you to use `_do` without installing anything. The alias will last for the duration of your terminal session. Want to make it persistent? Then add the alias to your `~/.bash_aliases` file or `~/.zshrc` if you use ZSH.
 
 ```bash
 alias _do='curl -sL https://captaincore.io/do | bash -s'
@@ -49,28 +43,28 @@ alias _do='curl -sL https://captaincore.io/do | bash -s'
 
 SSH in non-interactive mode doesn't support aliases. For that we can use the following patch in method.
 ```bash
-ssh username@ip-address -p 22 "captaincore-do() { curl -sL https://captaincore.io/do | bash -s -- \"\$@\"; }; \
-captaincore-do help version"
+ssh username@ip-address -p 22 "_do() { curl -sL https://captaincore.io/do | bash -s -- \"\$@\"; }; \
+_do help version"
 ```
 
 Response would be:
 
 ```bash
-Displays the current version of the captaincore-do script.
+Displays the current version of the _do script.
 
-Usage: captaincore-do version
+Usage: _do version
 ```
 
-Lastly, to install `captaincore-do`, follow these steps (coming soon).
+Lastly, to install `_do`, follow these steps (coming soon).
 
 ## Usage
 
-The main command structure is `captaincore-do <command> [arguments]`.
+The main command structure is `_do <command> [arguments]`.
 
 ## Development
 
 The project includes shell scripts for development purposes:
 
-`compile.sh`: This script combines the main script file and individual command files into a single, distributable script named `captaincore-do.sh`. It organizes the functions and adds the final execution call at the end.
+`compile.sh`: This script combines the main script file and individual command files into a single, distributable script named `_do.sh`. It organizes the functions and adds the final execution call at the end.
 
 `watch.sh`: This utility uses `fswatch` to monitor the main and commands directories for changes and automatically triggers the `compile.sh` script, streamlining the development process.

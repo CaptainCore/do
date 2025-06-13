@@ -3,7 +3,7 @@
 # ----------------------------------------------------
 function full_backup() {
     local target_folder="$1"
-    if [ -z "$target_folder" ]; then echo "Error: Please provide a folder path." >&2; echo "Usage: captaincore-do backup <folder>" >&2; return 1; fi
+    if [ -z "$target_folder" ]; then echo "Error: Please provide a folder path." >&2; echo "Usage: _do backup <folder>" >&2; return 1; fi
     if ! command -v realpath &> /dev/null; then echo "Error: 'realpath' command not found. Please install it." >&2; return 1; fi
     if [ ! -d "$target_folder" ]; then echo "Error: Folder '$target_folder' not found." >&2; return 1; fi
     

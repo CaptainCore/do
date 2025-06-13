@@ -3,8 +3,12 @@
 # ----------------------------------------------------
 function db_optimize() {
     # --- Pre-flight checks ---
-    if ! command -v wp &>/dev/null; then echo "Error: WP-CLI not found." >&2; return 1; fi 
-    if ! wp core is-installed --quiet; then echo "Error: This does not appear to be a WordPress installation." >&2; return 1; fi 
+    if ! setup_gum; then
+        echo "Aborting optimization: gum setup failed." >&2
+        return 1
+    fi
+    if ! command -v wp &>/dev/null; then echo "Error: WP-CLI not found." >&2; return 1; fi
+    if ! wp core is-installed --quiet; then echo "Error: This does not appear to be a WordPress installation." >&2; return 1; fi
 
     echo "🚀 Starting database optimization..."
     echo ""
@@ -12,20 +16,22 @@ function db_optimize() {
     # --- Step 1: Convert MyISAM to InnoDB ---
     echo "--- Step 1: Checking for MyISAM tables to convert to InnoDB ---"
     local myisam_tables
-    myisam_tables=$(wp db query "SELECT TABLE_NAME FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names) 
+    myisam_tables=$(wp db query "SELECT TABLE_NAME FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names)
 
-    if [[ -z "$myisam_tables" ]]; then 
-        echo "✅ All tables are already using the InnoDB engine. No conversion needed." 
+    if [[ -z "$myisam_tables" ]]; then
+        echo "✅ All tables are already using the InnoDB engine. No conversion needed."
     else
         echo "Found the following MyISAM tables to convert:"
-        echo "$myisam_tables"
-        echo "Converting tables to InnoDB..."
-        wp db query "SELECT CONCAT('ALTER TABLE \`', TABLE_NAME, '\` ENGINE=InnoDB;') FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names | wp db query 
+        # Use gum to format the list of tables
+        wp db query "SELECT TABLE_NAME AS 'MyISAM Tables' FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" | "$GUM_CMD" table --print --separator $'\t'
 
-        if [ $? -eq 0 ]; then 
+        echo "Converting tables to InnoDB..."
+        wp db query "SELECT CONCAT('ALTER TABLE \`', TABLE_NAME, '\` ENGINE=InnoDB;') FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names | wp db query
+
+        if [ $? -eq 0 ]; then
             echo "✅ Successfully converted tables to InnoDB."
         else
-            echo "❌ An error occurred during the conversion." 
+            echo "❌ An error occurred during the conversion."
             return 1
         fi
     fi
@@ -33,6 +39,7 @@ function db_optimize() {
     # --- Step 2: List Top 10 Largest Tables ---
     echo ""
     echo "--- Step 2: Top 10 Tables Larger Than 1MB ---"
+    # Use gum to format the table of large tables
     wp db query "
       SELECT
         TABLE_NAME,
@@ -49,7 +56,7 @@ function db_optimize() {
       ORDER BY
         (data_length + index_length) DESC
       LIMIT 10;
-    "
+    " | "$GUM_CMD" table --print --separator $'\t'
 
     # --- Step 3: Delete Expired Transients ---
     echo ""
