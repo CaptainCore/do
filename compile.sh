@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # ----------------------------------------------------
-#  Compiler for captaincore-do
+#  Compiler for _do
 #  Description: Combines the main script and individual command files into a single distributable script.
 # ----------------------------------------------------
 
 # --- Configuration ---
 # The final, compiled script that will be generated.
-OUTPUT_FILE="captaincore-do.sh"
+OUTPUT_FILE="_do.sh"
 
 # The main script file containing the entry point, helpers, and globals.
 MAIN_SCRIPT="main"
