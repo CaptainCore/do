@@ -1,0 +1,61 @@
+# ----------------------------------------------------
+#  Monitors access and error logs for HTTP 500 and PHP fatal errors.
+# ----------------------------------------------------
+function monitor_errors() {
+    if ! setup_gum; then
+        echo "Aborting monitor: gum setup failed." >&2
+        return 1
+    fi
+
+    # --- Find Log Files ---
+    local access_log_path=""
+    if [ -f "$HOME/logs/access.log" ]; then
+        access_log_path="$HOME/logs/access.log"
+    elif [ -f "logs/access.log" ]; then
+        access_log_path="logs/access.log"
+    elif [ -f "../logs/access.log" ]; then
+        access_log_path="../logs/access.log"
+    fi
+
+    local error_log_path=""
+    if [ -f "$HOME/logs/error.log" ]; then
+        error_log_path="$HOME/logs/error.log"
+    elif [ -f "logs/error.log" ]; then
+        error_log_path="logs/error.log"
+    elif [ -f "../logs/error.log" ]; then
+        error_log_path="../logs/error.log"
+    fi
+    
+    local files_to_monitor=()
+    if [ -n "$access_log_path" ]; then
+        echo "Checking for 500 errors in: $access_log_path" >&2
+        files_to_monitor+=("$access_log_path")
+    fi
+    if [ -n "$error_log_path" ]; then
+        echo "Checking for Fatal errors in: $error_log_path" >&2
+        files_to_monitor+=("$error_log_path")
+    fi
+
+    if [ ${#files_to_monitor[@]} -eq 0 ]; then
+        echo "No log files found in standard locations (~/logs/, logs/, ../logs/)" >&2
+        return 1
+    fi
+    
+    echo "Streaming errors from specified logs..." >&2
+    echo "(Press Ctrl+C to stop)" >&2
+
+    # --- Real-time Stream using `tail -F` ---
+    tail -q -n 0 -F "${files_to_monitor[@]}" | while read -r line; do
+        # Skip empty lines that might come from the pipe
+        if [ -z "$line" ]; then
+            continue
+        fi
+
+        # Check for the most specific term first ("Fatal") before less specific terms.
+        if [[ "$line" == *"Fatal"* ]]; then
+            "$GUM_CMD" log --level error "$line"
+        elif [[ "$line" == *" 500 "* ]]; then
+            "$GUM_CMD" log --level error "$line"
+        fi
+    done
+}
