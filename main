@@ -238,10 +238,10 @@ function show_command_help() {
             echo "  --top=<number>   The number of top IP/Status combinations to show. Default is 25."
             echo "  --now            Start processing from the end of the log file instead of the beginning."
             ;;
-        reset)
+        reset-wp)
             echo "Resets the WordPress installation to a default state."
             echo
-            echo "Usage: _do reset --admin_user=<username> [--admin_email=<email>]"
+            echo "Usage: _do reset-wp --admin_user=<username> [--admin_email=<email>]"
             echo
             echo "Flags:"
             echo "  --admin_user=<username>   (Required) The username for the new administrator."
@@ -310,7 +310,7 @@ function show_usage() {
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server access logs in real-time with top IP/status hits."
-    echo "  reset               Resets the WordPress installation to a default state."
+    echo "  reset-wp            Resets the WordPress installation to a default state."
     echo "  reset-permissions   Resets file and folder permissions to defaults."
     echo "  slow-plugins        Identifies plugins that may be slowing down WP-CLI."
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
@@ -484,10 +484,10 @@ function main() {
         monitor)
             monitor_traffic "$top_flag" "$now_flag"
             ;;
-        reset)
+        reset-wp)
             if [[ -z "$admin_user_flag" ]]; then
-                echo "Error: The 'reset' command requires the --admin_user=<...> flag." >&2
-                show_command_help "reset"
+                echo "Error: The 'reset-wp' command requires the --admin_user=<...> flag." >&2
+                show_command_help "reset-wp"
                 exit 1
             fi
             reset_site "$admin_user_flag" "$admin_email_flag"
