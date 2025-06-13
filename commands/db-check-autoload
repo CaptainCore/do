@@ -3,16 +3,20 @@
 # ----------------------------------------------------
 function db_check_autoload() {
     echo "Checking autoloaded options in the database..."
+    # Ensure the 'gum' utility is available for formatting
+    if ! setup_gum; then
+        echo "Aborting check: gum setup failed." >&2
+        return 1
+    fi
     if ! command -v wp &> /dev/null; then echo "Error: wp-cli is not installed." >&2; return 1; fi
     if ! command wp core is-installed --quiet; then echo "Error: This does not appear to be a WordPress installation." >&2; return 1; fi
 
     echo
     echo "--- Total Autoloaded Size ---"
-    wp db query "SELECT ROUND(SUM(LENGTH(option_value))/1024/1024, 2) as 'Autoload MB' FROM $(wp db prefix)options WHERE autoload='yes';"
-    
+    wp db query "SELECT ROUND(SUM(LENGTH(option_value))/1024/1024, 2) as 'Autoload MB' FROM $(wp db prefix)options WHERE autoload='yes';" | "$GUM_CMD" table --print --separator $'\t'
     echo
     echo "--- Top 25 Autoloaded Options & Totals ---"
-    wp db query "SELECT 'autoloaded data in MB' as name, ROUND(SUM(LENGTH(option_value))/ 1024 / 1024, 2) as value FROM $(wp db prefix)options WHERE autoload='yes' UNION SELECT 'autoloaded data count', count(*) FROM $(wp db prefix)options WHERE autoload='yes' UNION (SELECT option_name, round( length(option_value) / 1024 / 1024, 2) FROM $(wp db prefix)options WHERE autoload='yes' ORDER BY length(option_value) DESC LIMIT 25)"
+    wp db query "SELECT 'autoloaded data in MB' as name, ROUND(SUM(LENGTH(option_value))/ 1024 / 1024, 2) as value FROM $(wp db prefix)options WHERE autoload='yes' UNION SELECT 'autoloaded data count', count(*) FROM $(wp db prefix)options WHERE autoload='yes' UNION (SELECT option_name, round( length(option_value) / 1024 / 1024, 2) FROM $(wp db prefix)options WHERE autoload='yes' ORDER BY length(option_value) DESC LIMIT 25)" | "$GUM_CMD" table --print --separator $'\t'
     
     echo
     echo "✅ Autoload check complete."
