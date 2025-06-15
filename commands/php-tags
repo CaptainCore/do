@@ -1,0 +1,49 @@
+# ----------------------------------------------------
+#  Finds outdated or invalid PHP opening tags in PHP files.
+# ----------------------------------------------------
+function find_outdated_php_tags() {
+    local search_dir="${1:-wp-content/}"
+
+    #  Ensure the search directory ends with a slash for consistency
+    if [[ "${search_dir: -1}" != "/" ]]; then
+        search_dir+="/"
+    fi
+
+    if [ ! -d "$search_dir" ]; then
+        echo "❌ Error: Directory '$search_dir' not found." >&2
+        return 1
+    fi
+
+    echo "🚀 Searching for outdated PHP tags in '${search_dir}'..."
+    echo "This can take a moment for large directories."
+    echo
+
+    #  Use a more precise regex to find '<?' that is NOT followed by 'php', 'xml', or '='.
+    #  This avoids false positives for XML declarations and valid short echo tags.
+    #  The '-i' flag makes the 'php' and 'xml' check case-insensitive.
+    #  The '-P' flag enables Perl-compatible regular expressions (PCRE) for the negative lookahead.
+    local initial_results
+    initial_results=$(grep --include="*.php" --line-number --recursive -iP '<\?(?!php|xml|=)' "$search_dir" 2>/dev/null)
+
+    # Filter out common false positives from comments and string functions.
+    # This is not a perfect solution, but it significantly reduces noise.
+    # It removes lines starting with *, lines containing // or # comments,
+    # and lines where '<?' is found inside quotes or in common string functions.
+    local found_tags
+    found_tags=$(echo "$initial_results" \
+        | grep -v -F -e "strpos(" -e "str_replace(" \
+        | grep -v -E "^\s*\*|\s*//|\s*#|'\<\?'|\"\<\?\"" \
+    )
+
+    if [ -z "$found_tags" ]; then
+        echo "✅ No outdated PHP tags were found (after filtering common false positives)."
+    else
+        echo "⚠️ Found potentially outdated PHP tags in the following files:"
+        echo "-----------------------------------------------------"
+        #  The output from grep is already well-formatted.
+        echo "$found_tags"
+        echo "-----------------------------------------------------"
+        #  Use single quotes instead of backticks to prevent command execution.
+        echo "Recommendation: Replace all short tags like '<?' with the full '<?php' tag."
+    fi
+}
