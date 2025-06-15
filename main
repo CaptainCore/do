@@ -177,11 +177,6 @@ function show_command_help() {
             echo
             echo "Usage: _do backup <folder>"
             ;;
-        backup-db)
-            echo "Performs a DB-only backup to a secure private directory."
-            echo
-            echo "Usage: _do backup-db"
-            ;;
         clean)
             echo "Cleans up unused WordPress components or analyzes disk usage."
             echo
@@ -191,15 +186,15 @@ function show_command_help() {
             echo "  themes    Deletes all inactive themes except for the latest default WordPress theme."
             echo "  disk      Provides an interactive disk usage analysis for the current directory."
             ;;
-        db-check-autoload)
-            echo "Checks the size and top 25 largest autoloaded options in the DB."
+        db)
+            echo "Performs various database operations."
             echo
-            echo "Usage: _do db-check-autoload"
-            ;;
-        db-optimize)
-            echo "Converts all MyISAM database tables to the InnoDB engine."
+            echo "Usage: _do db <subcommand>"
             echo
-            echo "Usage: _do db-optimize"
+            echo "Subcommands:"
+            echo "  backup           Performs a DB-only backup to a secure private directory."
+            echo "  check-autoload   Checks the size and top 25 largest autoloaded options in the DB."
+            echo "  optimize         Converts tables to InnoDB, reports large tables, and cleans transients."
             ;;
         dump)
             echo "Dumps the content of files matching a pattern into a single text file."
@@ -307,11 +302,9 @@ function show_usage() {
     echo ""
     echo "Available Commands:"
     echo "  backup              Creates a full backup (files + DB) of a WordPress site."
-    echo "  backup-db           Performs a DB-only backup to a secure private directory."
-    echo "  clean               Removes unused items like inactive themes."
+    echo "  clean               Removes unused items like inactive themes or analyzes disk usage."
     echo "  convert-to-webp     Finds and converts large images (JPG, PNG) to WebP format."
-    echo "  db-check-autoload   Checks the size of autoloaded options in the database."
-    echo "  db-optimize         Converts all MyISAM database tables to the InnoDB engine."
+    echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server access logs in real-time with top IP/status hits."
@@ -442,9 +435,6 @@ function main() {
         backup)
             full_backup "${positional_args[1]}"
             ;;
-        backup-db)
-            db_backup
-            ;;
         clean)
             local arg1="${positional_args[1]}"
             case "$arg1" in
@@ -460,11 +450,23 @@ function main() {
                     ;;
             esac
             ;;
-        db-check-autoload)
-            db_check_autoload
-            ;;
-        db-optimize)
-            db_optimize
+        db)
+            local arg1="${positional_args[1]}"
+            case "$arg1" in
+                backup)
+                    db_backup # Originally from backup-db command 
+                    ;;
+                check-autoload)
+                    db_check_autoload # Originally from db-check-autoload command 
+                    ;;
+                optimize)
+                    db_optimize # Originally from db-optimize command 
+                    ;;
+                *)
+                    show_command_help "db"
+                    exit 0
+                    ;;
+            esac
             ;;
         convert-to-webp)
             convert_to_webp
