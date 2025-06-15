@@ -1,6 +1,6 @@
-# CaptainCore Do
+# CaptainCore `_do`
 
-A collection of useful command-line utilities for managing WordPress hosting environments. These tools are designed to streamline common administrative tasks such as backups, performance analysis, media optimization, and site migrations.
+A collection of useful command-line utilities for managing WordPress websites. These tools are designed to streamline common administrative tasks such as backups, performance analysis, media optimization, and site migrations.
 
 ## Features
 
@@ -35,13 +35,15 @@ These tools will be downloaded and installed into a `~/private` directory in you
 
 ## Installation
 
-The easiest way to use CaptainCore Do is by defining an alias to [captaincore.io/do](https://captaincore.io/do). That allows you to use `_do` without installing anything. The alias will last for the duration of your terminal session. Want to make it persistent? Then add the alias to your `~/.bash_aliases` file or `~/.zshrc` if you use ZSH.
+The easiest way to use CaptainCore `_do` is by defining an alias to [captaincore.io/do](https://captaincore.io/do).
 
 ```bash
 alias _do='curl -sL https://captaincore.io/do | bash -s'
 ```
 
-SSH in non-interactive mode doesn't support aliases. For that we can use the following patch in method.
+ That allows you to use `_do` without installing anything. The alias will last for the duration of your terminal session. Want to make it persistent? Then add the alias to your `~/.bash_aliases` file or `~/.zshrc` if you use ZSH.
+
+SSH in non-interactive mode doesn't support aliases. For that we can use the following method.
 ```bash
 ssh username@ip-address -p 22 "_do() { curl -sL https://captaincore.io/do | bash -s -- \"\$@\"; }; \
 _do help version"
@@ -54,8 +56,6 @@ Displays the current version of the _do script.
 
 Usage: _do version
 ```
-
-Lastly, to install `_do`, follow these steps (coming soon).
 
 ## Usage
 

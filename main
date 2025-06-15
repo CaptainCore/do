@@ -111,8 +111,7 @@ function setup_cwebp() {
 }
 
 # ----------------------------------------------------
-#  Checks for and installs 'rclone' if not present.
-#  Sets RCLONE_CMD on success.
+#  Checks for and installs 'rclone' if not present. Sets RCLONE_CMD on success.
 # ----------------------------------------------------
 function setup_rclone() {
     #  Return if already found
