@@ -225,18 +225,19 @@ function show_command_help() {
             echo "  --update-urls   Update urls to destination WordPress site. Default will keep source urls."
             ;;
         monitor)
-            echo "Monitors server access logs in real-time."
+            echo "Monitors server access logs or errors in real-time."
             echo
-            echo "Usage: _do monitor [--top=<number>] [--now]"
+            echo "Usage: _do monitor <subcommand> [--flags]"
             echo
-            echo "Optional Flags:"
-            echo "  --top=<number>   The number of top IP/Status combinations to show. Default is 25."
-            echo "  --now            Start processing from the end of the log file instead of the beginning."
-            ;;
-        monitor-errors)
-            echo "Monitors logs for HTTP 500 and PHP fatal errors in real-time."
+            echo "Subcommands:"
+            echo "  traffic       Analyzes and monitors top hits from access logs." 
+            echo "  errors        Monitors logs for HTTP 500 and PHP fatal errors." 
+            echo "  access.log    Provides a real-time stream of the access log."
+            echo "  error.log     Provides a real-time stream of the error log."
             echo
-            echo "Usage: captaincore-do monitor-errors"
+            echo "Flags for 'traffic':"
+            echo "  --top=<number>   The number of top IP/Status combinations to show. Default is 25." 
+            echo "  --now            Start processing from the end of the log file instead of the beginning." 
             ;;
         reset-wp)
             echo "Resets the WordPress installation to a default state."
@@ -307,8 +308,7 @@ function show_usage() {
     echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
     echo "  migrate             Migrates a site from a backup URL or local file."
-    echo "  monitor             Monitors server access logs in real-time with top IP/status hits."
-    echo "  monitor-errors      Monitors logs for HTTP 500 and PHP fatal errors in real-time."
+    echo "  monitor             Monitors server logs or errors in real-time."
     echo "  reset-wp            Resets the WordPress installation to a default state."
     echo "  reset-permissions   Resets file and folder permissions to defaults."
     echo "  slow-plugins        Identifies plugins that may be slowing down WP-CLI."
@@ -490,10 +490,25 @@ function main() {
             migrate_site "$url_flag" "$update_urls_flag"
             ;;
         monitor)
-            monitor_traffic "$top_flag" "$now_flag"
-            ;;
-        monitor-errors)
-            monitor_errors
+            local arg1="${positional_args[1]}"
+            case "$arg1" in
+                traffic)
+                    monitor_traffic "$top_flag" "$now_flag"
+                    ;;
+                errors)
+                    monitor_errors
+                    ;;
+                access.log)
+                    monitor_access_log
+                    ;;
+                error.log)
+                    monitor_error_log
+                    ;;
+                *)
+                    show_command_help "monitor"
+                    exit 0
+                    ;;
+            esac
             ;;
         reset-wp)
             if [[ -z "$admin_user_flag" ]]; then
