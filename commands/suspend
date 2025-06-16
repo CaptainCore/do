@@ -1,6 +1,5 @@
 # ----------------------------------------------------
 #  Deactivates a suspend message by removing the mu-plugin.
-#  (Formerly site_activate)
 # ----------------------------------------------------
 function suspend_deactivate() {
     local wp_content="$1"
@@ -10,7 +9,7 @@ function suspend_deactivate() {
         wp_content="wp-content"
     fi
 
-    local suspend_file="${wp_content}/mu-plugins/captaincore-suspended.php"
+    local suspend_file="${wp_content}/mu-plugins/do-suspend.php"
 
     if [ -f "$suspend_file" ]; then
         echo "Deactivating suspend message by removing ${suspend_file}..."
@@ -32,7 +31,6 @@ function suspend_deactivate() {
 
 # ----------------------------------------------------
 #  Activates a suspend message by adding an mu-plugin.
-#  (Formerly site_deactivate)
 # ----------------------------------------------------
 function suspend_activate() {
     local name="$1"
@@ -57,13 +55,13 @@ function suspend_activate() {
     fi
 
     #  Remove existing deactivation file if present
-    if [ -f "${wp_content}/mu-plugins/captaincore-suspended.php" ]; then
+    if [ -f "${wp_content}/mu-plugins/do-suspend.php" ]; then
         echo "Removing existing suspend file..."
-        rm "${wp_content}/mu-plugins/captaincore-suspended.php"
+        rm "${wp_content}/mu-plugins/do-suspend.php"
     fi
 
     #  Create the deactivation mu-plugin
-    local output_file="${wp_content}/mu-plugins/captaincore-suspended.php"
+    local output_file="${wp_content}/mu-plugins/do-suspend.php"
     echo "Generating suspend file at ${output_file}..."
     cat <<EOF > "$output_file"
 <?php
