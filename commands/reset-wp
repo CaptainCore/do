@@ -45,31 +45,7 @@ function reset_site() {
     wp plugin delete --all --skip-plugins --skip-themes
 
      echo "Step 6/9: Finding the latest default WordPress theme..."
-    latest_default_theme=$(cat <<'PHP_SCRIPT' | wp eval-file -
-<?php
-$response = wp_remote_get(
-  'https://api.wordpress.org/themes/info/1.2/?action=query_themes&request[author]=wordpressdotorg&request[per_page]=100'
-);
-if (is_wp_error($response)) {
-  exit(1);
-}
-$data = json_decode(wp_remote_retrieve_body($response));
-// Rewritten to avoid the ! character
-if (is_null($data) || isset($data->themes) === false) {
-  exit(1);
-}
-$twentyThemes = [];
-foreach ($data->themes as $theme) {
-  if (isset($theme->slug) && str_starts_with($theme->slug, 'twenty')) {
-    $twentyThemes[] = $theme->slug;
-  }
-}
-if (empty($twentyThemes)) {
-  exit(1);
-}
-echo $twentyThemes[0];
-PHP_SCRIPT
-)
+    latest_default_theme=$(wp theme search twenty --field=slug --per-page=1 --quiet --skip-plugins --skip-themes)
 
     if [ $? -ne 0 ] || [ -z "$latest_default_theme" ]; then
       echo "❌ Error: Could not determine the latest default theme. Aborting reset."  >&2
