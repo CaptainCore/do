@@ -50,5 +50,13 @@ function full_backup() {
     
     cd "$original_dir"
     
-    echo "-----------------------------------------------------"; echo "✅ Full site backup complete!"; echo "   Name: $name"; echo "   Location: $final_backup_location"; echo "   Size: $size"; echo "   URL: ${home_url}/${backup_filename}"; echo "-----------------------------------------------------"; echo "When done, remember to remove the backup file."; echo "rm -f \"$full_target_path/$backup_filename\""
+    echo "-----------------------------------------------------";
+    echo "✅ Full site backup complete!";
+    echo "   Name: $name";
+    echo "   Location: $final_backup_location";
+    echo "   Size: $size";
+    echo "   URL: ${home_url}/${backup_filename}";
+    echo "-----------------------------------------------------";
+    echo "When done, remember to remove the backup file.";
+    echo "rm -f \"$full_target_path/$backup_filename\""
 }
