@@ -83,8 +83,64 @@ function migrate_site() {
     fi
 
     echo "Migrating files..."
-    #  A safer way to migrate content is using rsync
-    rsync -av --remove-source-files "${wordpresspath}/" "${home_directory}/wp-content/"
+    # Migrate mu-plugins if found
+    if [ -d "$wordpresspath/wp-content/mu-plugins" ]; then
+        echo "Moving: mu-plugins"
+        cd "$wordpresspath/wp-content/mu-plugins"
+        for working in *; do
+            echo "$working"
+            if [ -f "$home_directory/wp-content/mu-plugins/$working" ]; then
+            rm "$home_directory/wp-content/mu-plugins/$working"
+            fi
+            if [ -d "$home_directory/wp-content/mu-plugins/$working" ]; then
+            rm -rf "$home_directory/wp-content/mu-plugins/$working"
+            fi
+            mv "$working" "$home_directory/wp-content/mu-plugins/"
+        done
+        cd "${private}/restore_${timedate}"
+    fi
+
+    # Migrate blogs.dir if found
+    if [ -d "$wordpresspath/blogs.dir" ]; then
+        echo "Moving: blogs.dir"
+        rm -rf "$home_directory/wp-content/blogs.dir"
+        mv "$wordpresspath/blogs.dir" "$home_directory/wp-content/"
+    fi
+
+    # Migrate gallery if found
+    if [ -d "$wordpresspath/gallery" ]; then
+        echo "Moving: gallery"
+        rm -rf "$home_directory/wp-content/gallery"
+        mv "$wordpresspath/gallery" "$home_directory/wp-content/"
+    fi
+
+    # Migrate ngg if found
+    if [ -d "$wordpresspath/ngg" ]; then
+        echo "Moving: ngg"
+        rm -rf "$home_directory/wp-content/ngg"
+        mv "$wordpresspath/ngg" "$home_directory/wp-content/"
+    fi
+
+    # Migrate uploads if found
+    if [ -d "$wordpresspath/uploads" ]; then
+        echo "Moving: uploads"
+        rm -rf "$home_directory/wp-content/uploads"
+        mv "$wordpresspath/uploads" "$home_directory/wp-content/"
+    fi
+
+    # Migrate themes if found
+    for d in $wordpresspath/themes/*/; do
+        echo "Moving: themes/$( basename "$d" )"
+        rm -rf "$home_directory/wp-content/themes/$( basename "$d" )"
+        mv "$d" "$home_directory/wp-content/themes/"
+    done
+
+    # Migrate plugins if found
+    for d in $wordpresspath/plugins/*/; do
+        echo "Moving: plugins/$( basename "$d" )"
+        rm -rf "$home_directory/wp-content/plugins/$( basename "$d" )"
+        mv "$d" "$home_directory/wp-content/plugins/"
+    done
     
     #  Find and move non-default root files
     local backup_root_dir; backup_root_dir=$(dirname "$wordpresspath")
