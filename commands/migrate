@@ -55,7 +55,7 @@ function migrate_site() {
     #  Download or use local file
     if [ ! -f "${private_dir}/${local_file_name}" ]; then
       echo "Downloading from $backup_url..."
-      wget --no-check-certificate --progress=bar:force:noscroll -O "backup_file" "$backup_url"
+      wget -q --show-progress --no-check-certificate --progress=bar:force:noscroll -O "backup_file" "$backup_url"
       if [ $? -ne 0 ]; then echo "❌ Error: Download failed."; cd "$home_directory"; return 1; fi
     else
       echo "ℹ️ Local file '${local_file_name}' found. Using it."
