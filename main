@@ -12,6 +12,7 @@ CAPTAINCORE_DO_VERSION="1.0"
 GUM_VERSION="0.14.4"
 CWEBP_VERSION="1.5.0"
 RCLONE_VERSION="1.69.3"
+GIT_VERSION="2.50.0"
 GUM_CMD=""
 CWEBP_CMD=""
 
@@ -159,6 +160,26 @@ function setup_rclone() {
 }
 
 # ----------------------------------------------------
+#  Checks for and installs 'git' if not present. Sets GIT_CMD on success.
+# ----------------------------------------------------
+function setup_git() {
+    #  Return if already found
+    if [[ -n "$GIT_CMD" ]]; then return 0; fi
+
+    #  If git is already in the PATH, we're good to go.
+    if command -v git &> /dev/null; then
+        GIT_CMD="git"
+        return 0
+    fi
+
+    # Since git is a more complex dependency, we'll just check for it
+    # and error out if it's not installed. A proper sideload for git
+    # is significantly more involved than for the other tools.
+    echo "❌ Error: 'git' command not found. Please install Git to use checkpoint features." >&2
+    return 1
+}
+
+# ----------------------------------------------------
 #  Displays detailed help for a specific command.
 # ----------------------------------------------------
 function show_command_help() {
@@ -184,6 +205,18 @@ function show_command_help() {
             echo "Subcommands:"
             echo "  themes    Deletes all inactive themes except for the latest default WordPress theme."
             echo "  disk      Provides an interactive disk usage analysis for the current directory."
+            ;;
+        checkpoint)
+            echo "Manages versioned checkpoints of a WordPress installation's manifest."
+            echo
+            echo "Usage: _do checkpoint <subcommand> [arguments]"
+            echo
+            echo "Subcommands:"
+            echo "  create          Creates a new checkpoint of the current plugin/theme/core manifest."
+            echo "  list            Lists all available checkpoints."
+            echo "  revert [<hash>] Reverts the site to the specified checkpoint hash."
+            echo "  show <hash>     Retrieves the details for a specific checkpoint hash."
+            echo "  latest          Gets the hash of the most recent checkpoint."
             ;;
         db)
             echo "Performs various database operations."
@@ -310,6 +343,7 @@ function show_usage() {
     echo ""
     echo "Available Commands:"
     echo "  backup              Creates a full backup (files + DB) of a WordPress site."
+    echo "  checkpoint          Manages versioned checkpoints of the site's manifest."
     echo "  clean               Removes unused items like inactive themes or analyzes disk usage."
     echo "  convert-to-webp     Finds and converts large images (JPG, PNG) to WebP format."
     echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
@@ -442,6 +476,32 @@ function main() {
     case "$command" in
         backup)
             full_backup "${positional_args[1]}"
+            ;;
+        checkpoint)
+            local subcommand="${positional_args[1]}"
+            case "$subcommand" in
+                create)
+                    checkpoint_create
+                    ;;
+                list)
+                    checkpoint_list
+                    ;;
+                revert)
+                    local hash="${positional_args[2]}"
+                    checkpoint_revert "$hash"
+                    ;;
+                show)
+                    local hash="${positional_args[2]}"
+                    checkpoint_show "$hash"
+                    ;;
+                latest)
+                    checkpoint_latest
+                    ;;
+                *)
+                    show_command_help "checkpoint"
+                    exit 0
+                    ;;
+            esac
             ;;
         clean)
             local arg1="${positional_args[1]}"
