@@ -316,6 +316,16 @@ function show_command_help() {
             echo "Flags for 'deactivate':"
             echo "  --wp-content=<path>         (Optional) Path to wp-content directory. Defaults to 'wp-content'."
             ;;
+        update)
+            echo "Handles WordPress core, theme, and plugin updates."
+            echo
+            echo "Usage: _do update <subcommand>"
+            echo
+            echo "Subcommands:"
+            echo "  all           Creates a 'before' checkpoint, runs all updates, creates an"
+            echo "                'after' checkpoint, and logs the changes."
+            echo "  list          Shows a list of past updates to inspect."
+            ;;
         version)
             echo "Displays the current version of the _do script."
             echo
@@ -355,6 +365,7 @@ function show_usage() {
     echo "  reset-permissions   Resets file and folder permissions to defaults."
     echo "  slow-plugins        Identifies plugins that may be slowing down WP-CLI."
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
+    echo "  update              Runs WordPress updates and logs the changes."
     echo "  version             Displays the current version of the _do script."
     echo ""
     echo "Run '_do help <command>' for more information on a specific command."
@@ -609,6 +620,17 @@ function main() {
                     exit 0
                     ;;
             esac
+            ;;
+        update)
+            local subcommand="${positional_args[1]}"
+            if [[ "$all_flag" == "true" || "$subcommand" == "all" ]]; then
+                run_update_all
+            elif [[ "$subcommand" == "list" ]]; then
+                update_list
+            else
+                show_command_help "update"
+                exit 1
+            fi
             ;;
         version|--version|-v)
             show_version

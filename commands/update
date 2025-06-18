@@ -1,0 +1,210 @@
+# ----------------------------------------------------
+#  Update Commands
+#  Handles WordPress core, theme, and plugin updates.
+# ----------------------------------------------------
+
+UPDATE_LOGS_DIR="../private/checkpoints/updates"
+UPDATE_LOGS_LIST_FILE="$UPDATE_LOGS_DIR/list.json"
+
+# ----------------------------------------------------
+#  Ensures update directories and lists exist.
+# ----------------------------------------------------
+function _ensure_update_setup() {
+    mkdir -p "$UPDATE_LOGS_DIR"
+    if [ ! -f "$UPDATE_LOGS_LIST_FILE" ]; then
+        echo "[]" > "$UPDATE_LOGS_LIST_FILE"
+    fi
+}
+
+# ----------------------------------------------------
+#  Lists all past updates with detailed summaries.
+# ----------------------------------------------------
+function update_list() {
+    if ! setup_gum || ! setup_git; then return 1; fi
+    _ensure_update_setup
+
+    if [ ! -s "$UPDATE_LOGS_LIST_FILE" ]; then
+        echo "ℹ️ No update logs found."
+        return 0
+    fi
+    
+    echo "🔎 Analyzing update logs... (This may take a moment)"
+
+    # Use PHP to read the list of update logs
+    local php_script_read_list='
+<?php
+$list_file = "%s";
+$list = json_decode(file_get_contents($list_file), true);
+if (!is_array($list) || empty($list)) { return; }
+foreach($list as $item) {
+    if (isset($item["timestamp"]) && isset($item["before"]) && isset($item["after"])) {
+        // Output format: timestamp|hash_before|hash_after
+        echo $item["timestamp"] . "|" . $item["before"] . "|" . $item["after"] . "\n";
+    }
+}
+'
+    local php_script; php_script=$(printf "$php_script_read_list" "$UPDATE_LOGS_LIST_FILE")
+    local update_entries; update_entries=$(echo "$php_script" | wp eval-file -)
+
+    # This check prevents the script from failing if no update entries are found.
+    if [ -z "$update_entries" ]; then
+        echo "ℹ️ No update logs found."
+        return 0
+    fi
+
+    local display_items=()
+    local data_items=()
+    
+    # Process each entry to build the detailed list for gum
+    while IFS='|' read -r timestamp hash_before hash_after; do
+        # Safeguard against empty lines from the pipe
+        if [ -z "$timestamp" ] || [ -z "$hash_before" ] || [ -z "$hash_after" ]; then
+            continue
+        fi
+
+        hash_before=$(echo "$hash_before" | tr -d '[:space:]')
+        hash_after=$(echo "$hash_after" | tr -d '[:space:]')
+        
+        local manifest_after; manifest_after=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" show "$hash_after:manifest.json" 2>/dev/null)
+        if [ -z "$manifest_after" ]; then
+            echo "⚠️ Warning: Could not find manifest for hash '$hash_after'. Skipping entry." >&2
+            continue
+        fi
+
+        local php_get_counts='
+<?php
+$manifest_json = <<<'EOT'
+%s
+EOT;
+$data = json_decode($manifest_json, true);
+$theme_count = isset($data["themes"]) && is_array($data["themes"]) ? count($data["themes"]) : 0;
+$plugin_count = isset($data["plugins"]) && is_array($data["plugins"]) ? count($data["plugins"]) : 0;
+echo "$theme_count Th, $plugin_count Pl";
+'
+        local counts_script; counts_script=$(printf "$php_get_counts" "$manifest_after")
+        local counts_str; counts_str=$(echo "$counts_script" | wp eval-file -)
+        
+        local diff_stats
+        diff_stats=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" diff --shortstat "$hash_before" "$hash_after" -- 'plugins/' 'themes/' 'mu-plugins/' | sed 's/^[ \t]*//')
+        if [ -z "$diff_stats" ]; then
+            diff_stats="No file changes."
+        fi
+
+        local formatted_timestamp
+        if [[ "$(uname)" == "Darwin" ]]; then
+            formatted_timestamp=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" -u "$timestamp" "+%a, %b %d, %Y, %-I:%M %p")
+        else
+            formatted_timestamp=$(date -d "$timestamp" "+%a, %b %d, %Y, %-I:%M %p")
+        fi
+
+        local display_string
+        display_string=$(printf "%-28s | %s -> %s | %-18s | %s" \
+            "$formatted_timestamp" "${hash_before:0:7}" "${hash_after:0:7}" "$counts_str" "$diff_stats")
+
+        display_items+=("$display_string")
+        data_items+=("$hash_before|$hash_after")
+    done <<< "$update_entries"
+
+    if [ ${#display_items[@]} -eq 0 ]; then
+      echo "No valid update entries to display."
+      return 1
+    fi
+    
+    local selected_display
+    selected_display=$(printf "%s\n" "${display_items[@]}" | gum filter --height=20 --prompt="👇 Select an update to inspect" --indicator="→" --placeholder="")
+
+    if [ -z "$selected_display" ]; then
+        echo "No update selected."
+        return 0
+    fi
+    
+    local selected_index=-1
+    for i in "${!display_items[@]}"; do
+       if [[ "${display_items[$i]}" == "$selected_display" ]]; then
+           selected_index=$i
+           break
+       fi
+    done
+
+    if [ "$selected_index" -ne -1 ]; then
+        local selected_data=${data_items[$selected_index]}
+        local selected_hash_before; selected_hash_before=$(echo "$selected_data" | cut -d'|' -f1)
+        local selected_hash_after; selected_hash_after=$(echo "$selected_data" | cut -d'|' -f2)
+
+        checkpoint_show "$selected_hash_after" "$selected_hash_before"
+    else
+        echo "❌ Error: Could not extract hashes from selected entry."
+    fi
+}
+
+# ----------------------------------------------------
+#  Runs the full update process.
+# ----------------------------------------------------
+function run_update_all() {
+    if ! setup_git; then return 1; fi
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+
+    _ensure_checkpoint_setup
+    _ensure_update_setup
+
+    echo "🚀 Starting full WordPress update process..."
+
+    echo "   - Step 1/5: Creating 'before' checkpoint..."
+    checkpoint_create > /dev/null
+    local hash_before; hash_before=$(checkpoint_latest)
+    if [ -z "$hash_before" ]; then
+        echo "❌ Error: Could not create 'before' checkpoint." >&2
+        return 1
+    fi
+    echo "     Before Hash: $hash_before"
+
+    echo "   - Step 2/5: Running WordPress updates..."
+    echo "     - Updating core..."
+    wp core update --skip-plugins --skip-themes
+    echo "     - Updating themes..."
+    wp theme update --all --skip-plugins --skip-themes
+    echo "     - Updating plugins..."
+    wp plugin update --all --skip-plugins --skip-themes
+
+    echo "   - Step 3/5: Creating 'after' checkpoint..."
+    checkpoint_create > /dev/null
+    local hash_after; hash_after=$(checkpoint_latest)
+    if [ -z "$hash_after" ]; then
+        echo "❌ Error: Could not create 'after' checkpoint." >&2
+        return 1
+    fi
+    echo "     After Hash: $hash_after"
+    
+    if [ "$hash_before" == "$hash_after" ]; then
+        echo "✅ No updates were available. Site is up-to-date."
+        return 0
+    fi
+    
+    echo "   - Step 4/5: Generating update log..."
+    local timestamp; timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    echo "   - Step 5/5: Updating master list..."
+    local php_list_template='
+<?php
+$list_file = "%s";
+$before = "%s";
+$after = "%s";
+$timestamp = "%s";
+$list = file_exists($list_file) ? json_decode(file_get_contents($list_file), true) : [];
+if (!is_array($list)) { $list = []; }
+$new_entry = ["before" => $before, "after" => $after, "timestamp" => $timestamp];
+array_unshift($list, $new_entry);
+echo json_encode($list, JSON_PRETTY_PRINT);
+'
+    local php_list_script; php_list_script=$(printf "$php_list_template" "$UPDATE_LOGS_LIST_FILE" "$hash_before" "$hash_after" "$timestamp")
+    
+    local temp_list_file; temp_list_file=$(mktemp)
+    if echo "$php_list_script" | wp eval-file - > "$temp_list_file"; then
+        mv "$temp_list_file" "$UPDATE_LOGS_LIST_FILE"
+    else
+        echo "❌ Error: Failed to update master update list." >&2
+        rm "$temp_list_file"
+    fi
+
+    echo "✅ Update process complete."
+}
