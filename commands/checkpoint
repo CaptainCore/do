@@ -169,10 +169,24 @@ function checkpoint_create() {
         return 0
     fi
     
+    # Set a default author identity for the commit to prevent errors on remote systems
+    # where git might not be configured. This is a local config for this repo only.
+    "$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" config user.email "script@captaincore.io"
+    "$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" config user.name "_do Script"
+
     local timestamp; timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     "$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" commit -m "Checkpoint $timestamp" > /dev/null
+    if [ $? -ne 0 ]; then
+        echo "❌ Error: Failed to commit checkpoint changes." >&2
+        return 1
+    fi
     
     local commit_hash; commit_hash=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" rev-parse HEAD)
+    if [ -z "$commit_hash" ]; then
+        echo "❌ Error: Could not retrieve commit hash after creating checkpoint." >&2
+        return 1
+    fi
+
     local checkpoint_file="$CHECKPOINT_BASE_DIR/$commit_hash.json"
 
     echo "   - Saving checkpoint details..."
