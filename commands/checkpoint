@@ -202,25 +202,24 @@ echo json_encode($list, JSON_PRETTY_PRINT);
     
     echo "✅ Checkpoint created successfully."
     echo "   Hash: $commit_hash"
+    
+    # Automatically regenerate the detailed checkpoint list
+    echo "   - Regenerating detailed checkpoint list..."
+    checkpoint_list_generate > /dev/null
 }
 
 # ----------------------------------------------------
-#  Lists all checkpoints with detailed summaries and allows selection.
+#  Generates a detailed list of checkpoints for faster access.
 # ----------------------------------------------------
-function checkpoint_list() {
+function checkpoint_list_generate() {
     if ! setup_gum || ! setup_git; then return 1; fi
     _ensure_checkpoint_setup
 
-    if [ ! -s "$CHECKPOINT_LIST_FILE" ]; then
-        echo "ℹ️ No checkpoints found."
-        return 0
-    fi
-    
-    echo "🔎 Analyzing checkpoints... (This may take a moment)"
-
+    # Read the potentially simple list created by `checkpoint create`
     local php_script_read_list='
 <?php
 $list_file = "%s";
+if (!file_exists($list_file)) { return; }
 $list = json_decode(file_get_contents($list_file), true);
 if (!is_array($list) || empty($list)) { return; }
 foreach($list as $item) {
@@ -232,11 +231,18 @@ foreach($list as $item) {
     local php_script; php_script=$(printf "$php_script_read_list" "$CHECKPOINT_LIST_FILE")
     local checkpoint_entries; checkpoint_entries=$(echo "$php_script" | wp eval-file -)
 
-    local display_items=()
-    local data_items=()
+    if [ -z "$checkpoint_entries" ]; then
+        echo "ℹ️ No checkpoints found to generate a list from."
+        return 0
+    fi
+    
+    echo "🔎 Generating detailed checkpoint list... (This may take a moment)"
+    local detailed_items=()
 
     while IFS='|' read -r timestamp hash; do
         hash=$(echo "$hash" | tr -d '[:space:]')
+        if [ -z "$hash" ]; then continue; fi
+
         local parent_hash=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" log -n 1 --pretty=format:%P "$hash" 2>/dev/null)
         local manifest_current; manifest_current=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" show "$hash:manifest.json" 2>/dev/null)
         if [ -z "$manifest_current" ]; then continue; fi
@@ -267,6 +273,93 @@ echo "$theme_count Themes, $plugin_count Plugins";
             formatted_timestamp=$(date -d "$timestamp" "+%a, %b %d, %Y, %-I:%M %p")
         fi
 
+        # Create a JSON object for this item
+        local json_item
+        json_item=$(printf '{"hash": "%s", "timestamp": "%s", "formatted_timestamp": "%s", "counts_str": "%s", "diff_stats": "%s"}' \
+            "$hash" "$timestamp" "$formatted_timestamp" "$counts_str" "$diff_stats")
+        
+        detailed_items+=("$json_item")
+
+    done <<< "$checkpoint_entries"
+    
+    # Write the detailed list back to the file
+    local full_json="["
+    full_json+=$(IFS=,; echo "${detailed_items[*]}")
+    full_json+="]"
+
+    # Use PHP to pretty-print the JSON to the file
+    local php_write_script='
+<?php
+$list_file = "%s";
+$json_data = <<<'EOT'
+%s
+EOT;
+$data = json_decode($json_data, true);
+file_put_contents($list_file, json_encode($data, JSON_PRETTY_PRINT));
+'
+    local write_script; write_script=$(printf "$php_write_script" "$CHECKPOINT_LIST_FILE" "$full_json")
+    if echo "$write_script" | wp eval-file -; then
+        echo "✅ Detailed checkpoint list saved to $CHECKPOINT_LIST_FILE"
+    else
+        echo "❌ Error: Failed to write detailed list."
+    fi
+}
+
+
+# ----------------------------------------------------
+#  (Helper) Lets the user select a checkpoint hash from the list.
+# ----------------------------------------------------
+function _select_checkpoint_hash() {
+    _ensure_checkpoint_setup
+
+    if [ ! -s "$CHECKPOINT_LIST_FILE" ]; then
+        echo "ℹ️ No checkpoints found. Run '_do checkpoint create' to make one." >&2
+        return 1
+    fi
+    
+    # Use PHP to read the detailed list and check if it's in the new format
+    local php_script_read_list='
+<?php
+$list_file = "%s";
+$list = json_decode(file_get_contents($list_file), true);
+
+if (!is_array($list) || empty($list)) {
+    echo "EMPTY";
+    return;
+}
+
+// Check if the first item has the detailed format.
+if (!isset($list[0]["formatted_timestamp"])) {
+    echo "NEEDS_GENERATE";
+    return;
+}
+
+foreach($list as $item) {
+    if (isset($item["formatted_timestamp"]) && isset($item["hash"]) && isset($item["counts_str"]) && isset($item["diff_stats"])) {
+        // Output format: formatted_timestamp|hash|counts_str|diff_stats
+        echo $item["formatted_timestamp"] . "|" . $item["hash"] . "|" . $item["counts_str"] . "|" . $item["diff_stats"] . "\n";
+    }
+}
+'
+    local php_script; php_script=$(printf "$php_script_read_list" "$CHECKPOINT_LIST_FILE")
+    local checkpoint_entries; checkpoint_entries=$(echo "$php_script" | wp eval-file -)
+
+    if [[ "$checkpoint_entries" == "EMPTY" ]]; then
+        echo "ℹ️ No checkpoints available to select." >&2; return 1;
+    elif [[ "$checkpoint_entries" == "NEEDS_GENERATE" ]]; then
+        echo "⚠️ The checkpoint list needs to be generated for faster display." >&2
+        echo "Please run: _do checkpoint list-generate" >&2
+        return 1
+    fi
+
+    local display_items=()
+    local data_items=()
+
+    while IFS='|' read -r formatted_timestamp hash counts_str diff_stats; do
+        # Sanitize the hash to remove any potential leading/trailing whitespace or invisible characters.
+        hash=$(echo "$hash" | tr -d '[:space:]')
+        if [ -z "$hash" ]; then continue; fi
+
         local display_string
         display_string=$(printf "%-28s | %s | %-18s | %s" \
             "$formatted_timestamp" "${hash:0:7}" "$counts_str" "$diff_stats")
@@ -276,15 +369,16 @@ echo "$theme_count Themes, $plugin_count Plugins";
     done <<< "$checkpoint_entries"
     
     if [ ${#display_items[@]} -eq 0 ]; then
-      echo "No valid checkpoints to display."
+      echo "❌ No valid checkpoints to display." >&2
       return 1
     fi
 
+    local prompt_text="${1:-Select a checkpoint to inspect}"
     local selected_display
-    selected_display=$(printf "%s\n" "${display_items[@]}" | gum filter --height=20 --prompt="👇 Select a checkpoint to inspect" --indicator="→" --placeholder="")
+    selected_display=$(printf "%s\n" "${display_items[@]}" | gum filter --height=20 --prompt="👇 $prompt_text" --indicator="→" --placeholder="")
 
     if [ -z "$selected_display" ]; then
-        echo "No checkpoint selected."
+        echo "" # Return empty for cancellation
         return 0
     fi
 
@@ -297,11 +391,33 @@ echo "$theme_count Themes, $plugin_count Plugins";
     done
 
     if [ "$selected_index" -ne -1 ]; then
-        local selected_hash=${data_items[$selected_index]}
-        checkpoint_show "$selected_hash"
+        echo "${data_items[$selected_index]}"
+        return 0
     else
-        echo "❌ Error: Could not find selected checkpoint."
+        echo "❌ Error: Could not find selected checkpoint." >&2
+        return 1
     fi
+}
+
+# ----------------------------------------------------
+#  Lists all checkpoints from the pre-generated list and allows selection.
+# ----------------------------------------------------
+function checkpoint_list() {
+    if ! setup_gum || ! setup_git; then return 1; fi
+    
+    local selected_hash
+    selected_hash=$(_select_checkpoint_hash "Select a checkpoint to inspect")
+
+    if [ -z "$selected_hash" ]; then
+        echo "No checkpoint selected."
+        return 0
+    fi
+    # Check exit code of the helper
+    if [ $? -ne 0 ]; then
+        return 1 # Error already printed by helper
+    fi
+
+    checkpoint_show "$selected_hash"
 }
 
 # ----------------------------------------------------
@@ -311,106 +427,23 @@ function checkpoint_revert() {
     local target_hash="$1"
 
     if ! setup_gum || ! setup_git; then return 1; fi
-    _ensure_checkpoint_setup
 
     # If no hash is provided, let the user pick one from a detailed list.
     if [ -z "$target_hash" ]; then
-        echo "No hash provided. Please select a checkpoint to revert to."
+        target_hash=$(_select_checkpoint_hash "Select a checkpoint to revert to")
         
-        if [ ! -s "$CHECKPOINT_LIST_FILE" ]; then
-            echo "❌ No checkpoints available to select." >&2
-            return 1
-        fi
-        
-        # --- Start: Reused logic from checkpoint_list ---
-        echo "🔎 Analyzing checkpoints... (This may take a moment)"
-        
-        local php_script_read_list='
-<?php
-$list_file = "%s";
-$list = json_decode(file_get_contents($list_file), true);
-if (!is_array($list) || empty($list)) { return; }
-foreach($list as $item) {
-    if (isset($item["timestamp"]) && isset($item["hash"])) {
-        echo $item["timestamp"] . "|" . $item["hash"] . "\n";
-    }
-}
-'
-        local php_script; php_script=$(printf "$php_script_read_list" "$CHECKPOINT_LIST_FILE")
-        local checkpoint_entries; checkpoint_entries=$(echo "$php_script" | wp eval-file -)
-
-        local display_items=()
-        local data_items=()
-
-        while IFS='|' read -r timestamp hash; do
-            hash=$(echo "$hash" | tr -d '[:space:]')
-            local parent_hash=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" log -n 1 --pretty=format:%P "$hash" 2>/dev/null)
-            local manifest_current; manifest_current=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" show "$hash:manifest.json" 2>/dev/null)
-            if [ -z "$manifest_current" ]; then continue; fi
-
-            local php_get_counts='
-<?php
-$manifest_json = <<<'EOT'
-%s
-EOT;
-$data = json_decode($manifest_json, true);
-$theme_count = isset($data["themes"]) && is_array($data["themes"]) ? count($data["themes"]) : 0;
-$plugin_count = isset($data["plugins"]) && is_array($data["plugins"]) ? count($data["plugins"]) : 0;
-echo "$theme_count Themes, $plugin_count Plugins";
-'
-            local counts_script; counts_script=$(printf "$php_get_counts" "$manifest_current")
-            local counts_str; counts_str=$(echo "$counts_script" | wp eval-file -)
-            
-            local diff_stats="Initial checkpoint"
-            if [ -n "$parent_hash" ]; then
-                diff_stats=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" diff --shortstat "$parent_hash" "$hash" -- 'plugins/' 'themes/' 'mu-plugins/' | sed 's/^[ \t]*//')
-                if [ -z "$diff_stats" ]; then diff_stats="No file changes"; fi
-            fi
-
-            local formatted_timestamp
-            if [[ "$(uname)" == "Darwin" ]]; then
-                formatted_timestamp=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" -u "$timestamp" "+%a, %b %d, %Y, %-I:%M %p")
-            else
-                formatted_timestamp=$(date -d "$timestamp" "+%a, %b %d, %Y, %-I:%M %p")
-            fi
-
-            local display_string
-            display_string=$(printf "%-28s | %s | %-18s | %s" "$formatted_timestamp" "${hash:0:7}" "$counts_str" "$diff_stats")
-            
-            display_items+=("$display_string")
-            data_items+=("$hash")
-        done <<< "$checkpoint_entries"
-
-        if [ ${#display_items[@]} -eq 0 ]; then
-            echo "❌ No checkpoints available to select." >&2
-            return 1
-        fi
-        
-        local selected_display
-        selected_display=$(printf "%s\n" "${display_items[@]}" | gum filter --height=20 --prompt="👇 Select a checkpoint to revert to" --indicator="→" --placeholder="")
-
-        if [ -z "$selected_display" ]; then
-            echo "No checkpoint selected. Aborting."
+        if [ -z "$target_hash" ]; then
+            echo "Revert cancelled."
             return 0
         fi
-        
-        local selected_index=-1
-        for i in "${!display_items[@]}"; do
-           if [[ "${display_items[$i]}" == "$selected_display" ]]; then
-               selected_index=$i
-               break
-           fi
-        done
-
-        if [ "$selected_index" -ne -1 ]; then
-            target_hash=${data_items[$selected_index]}
-        else
-            echo "❌ Error: Could not find selected checkpoint. Aborting."
-            return 1
+        # Check the exit code of the helper
+        if [ $? -ne 0 ]; then
+            return 1 # Error was already printed by the helper
         fi
-        # --- End: Reused logic ---
     fi
     
+    _ensure_checkpoint_setup
+
     # Validate the hash to ensure it exists in the repo before proceeding
     if ! "$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" cat-file -e "${target_hash}^{commit}" &>/dev/null; then
         echo "❌ Error: Checkpoint hash '$target_hash' not found." >&2
@@ -464,6 +497,7 @@ function checkpoint_show() {
     fi
 
     if ! setup_gum || ! setup_git; then return 1; fi
+    _ensure_checkpoint_setup
 
     # If 'before' hash is not provided, find the parent of the 'after' hash.
     if [ -z "$hash_before" ]; then
@@ -485,6 +519,21 @@ function checkpoint_show() {
         fi
     fi
     
+    # Get a list of themes and plugins that have actual file changes.
+    local changed_files_list
+    changed_files_list=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" diff --name-only "$hash_before" "$hash_after" -- 'plugins/' 'themes/' 'mu-plugins/')
+
+    local items_with_file_changes=()
+    while IFS= read -r file_path; do
+        if [[ -n "$file_path" ]]; then
+            local item_name
+            item_name=$(echo "$file_path" | cut -d'/' -f2)
+            items_with_file_changes+=("$item_name")
+        fi
+    done <<< "$changed_files_list"
+    local changed_items_str
+    changed_items_str=$(printf "%s\n" "${items_with_file_changes[@]}" | sort -u | tr '\n' ',' | sed 's/,$//')
+
     # --- 1. Generate list of ALL items from PHP ---
     local php_script
     read -r -d '' php_script <<PHP
@@ -498,11 +547,13 @@ EOT;
 \$manifest_before_json = <<<'EOT'
 $manifest_before
 EOT;
+\$changed_items_str = '$changed_items_str';
 
 \$after_data = json_decode(\$manifest_after_json, true);
 \$before_data = json_decode(\$manifest_before_json, true);
+\$items_with_file_changes = !empty(\$changed_items_str) ? explode(',', \$changed_items_str) : [];
 
-function process_item_diff(\$item_type, \$after_items, \$before_items) {
+function process_item_diff(\$item_type, \$after_items, \$before_items, \$items_with_file_changes) {
     \$after_map = [];
     if (is_array(\$after_items)) { foreach (\$after_items as \$item) { \$after_map[\$item["name"]] = \$item; } }
 
@@ -529,6 +580,11 @@ function process_item_diff(\$item_type, \$after_items, \$before_items) {
                 \$change_parts[] = "status " . \$before_item["status"] . " -> " . \$after_item["status"];
                 \$has_changed = true;
             }
+            // Check for file changes only if the item exists in both states
+            if (in_array(\$name, \$items_with_file_changes, true)) {
+                \$change_parts[] = "files changed";
+                \$has_changed = true;
+            }
         // Item was added
         } elseif (\$after_item && !\$before_item) {
             \$change_parts[] = "installed";
@@ -546,7 +602,7 @@ function process_item_diff(\$item_type, \$after_items, \$before_items) {
         \$prefix = \$has_changed ? "ℹ️  " : "   ";
         
         if (\$has_changed) {
-            \$details_string = implode(", ", \$change_parts);
+            \$details_string = implode(", ", array_unique(\$change_parts));
         } else {
             \$version = \$item_for_details["version"] ?? 'N/A';
             \$status = \$item_for_details["status"] ?? 'N/A';
@@ -577,8 +633,8 @@ function process_item_diff(\$item_type, \$after_items, \$before_items) {
     }
 }
 
-process_item_diff('Theme', \$after_data['themes'] ?? [], \$before_data['themes'] ?? []);
-process_item_diff('Plugin', \$after_data['plugins'] ?? [], \$before_data['plugins'] ?? []);
+process_item_diff('Theme', \$after_data['themes'] ?? [], \$before_data['themes'] ?? [], \$items_with_file_changes);
+process_item_diff('Plugin', \$after_data['plugins'] ?? [], \$before_data['plugins'] ?? [], \$items_with_file_changes);
 PHP
 
     local diff_data
@@ -589,81 +645,84 @@ PHP
         return 0
     fi
 
-    # --- 2. Interactive Item Selection ---
-    local selected_display_text
-    selected_display_text=$(echo "$diff_data" | cut -d'|' -f1 | gum filter --prompt="👇 Select item to inspect (checkpoints ${hash_before:0:7} -> ${hash_after:0:7})" --height=20 --indicator="→" --placeholder="")
+    # Start a loop to allow returning to the item selection.
+    while true; do
+        # --- 2. Interactive Item Selection ---
+        local selected_display_text
+        selected_display_text=$(echo "$diff_data" | cut -d'|' -f1 | gum filter --prompt="👇 Select item to inspect (checkpoints ${hash_before:0:7} -> ${hash_after:0:7}). Press Esc to exit." --height=20 --indicator="→" --placeholder="")
 
-    if [ -z "$selected_display_text" ]; then
-        echo "No item selected. Exiting."
-        return 0
-    fi
+        if [ -z "$selected_display_text" ]; then
+            # User pressed Esc, so break the loop and exit the function.
+            break
+        fi
 
-    local full_data_line
-    full_data_line=$(echo "$diff_data" | grep -Fm 1 "$selected_display_text")
-    local item_type item_name
-    item_type=$(echo "$full_data_line" | cut -d'|' -f2)
-    item_name=$(echo "$full_data_line" | cut -d'|' -f3)
+        local full_data_line
+        full_data_line=$(echo "$diff_data" | grep -Fm 1 "$selected_display_text")
+        local item_type item_name
+        item_type=$(echo "$full_data_line" | cut -d'|' -f2)
+        item_name=$(echo "$full_data_line" | cut -d'|' -f3)
 
-    # --- 3. Get wp-content Path ---
-    local wp_content_dir
-    wp_content_dir=$(wp eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
-    if [ -z "$wp_content_dir" ] || [ ! -d "$wp_content_dir" ]; then
-        echo "❌ Error: Could not determine wp-content directory." >&2
-        return 1
-    fi
+        # --- 3. Get wp-content Path ---
+        local wp_content_dir
+        wp_content_dir=$(wp eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
+        if [ -z "$wp_content_dir" ] || [ ! -d "$wp_content_dir" ]; then
+            echo "❌ Error: Could not determine wp-content directory." >&2
+            return 1
+        fi
 
-    # --- 4. Interactive Action Selection ---
-    local choices=("Show File Changes" "Revert Files to 'After' State (${hash_after:0:7})")
-    if [ -n "$hash_before" ]; then
-        choices+=("Revert Files to 'Before' State (${hash_before:0:7})")
-    fi
-    choices+=("Cancel")
-    
-    local action; action=$(gum choose "${choices[@]}")
+        # --- 4. Interactive Action Selection ---
+        local choices=("Show File Changes" "Revert Files to 'After' State (${hash_after:0:7})")
+        if [ -n "$hash_before" ]; then
+            choices+=("Revert Files to 'Before' State (${hash_before:0:7})")
+        fi
+        choices+=("Back to item list")
+        
+        local action; action=$(gum choose "${choices[@]}")
 
-    # --- 5. Execute Action ---
-    case "$action" in
-        "Show File Changes")
-            local item_path_in_repo="${item_type}s/${item_name}"
-            
-            # Get the list of files that have changed for the selected item.
-            local changed_files
-            changed_files=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" diff --name-only "$hash_before" "$hash_after" -- "$item_path_in_repo")
+        # --- 5. Execute Action ---
+        case "$action" in
+            "Show File Changes")
+                local item_path_in_repo="${item_type}s/${item_name}"
+                
+                # Get the list of files that have changed for the selected item.
+                local changed_files
+                changed_files=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" diff --name-only "$hash_before" "$hash_after" -- "$item_path_in_repo")
 
-            if [ -z "$changed_files" ]; then
-                gum spin --spinner dot --title "No file changes found for '$item_name'." -- sleep 3
-            else
-                echo "Showing file changes for '$item_name' between ${hash_before:0:7} and ${hash_after:0:7}."
+                if [ -z "$changed_files" ]; then
+                    gum spin --spinner dot --title "No file changes found for '$item_name'." -- sleep 3
+                else
+                    echo "Showing file changes for '$item_name' between ${hash_before:0:7} and ${hash_after:0:7}."
 
-                # Loop to allow viewing multiple diffs
-                while true; do
-                    local selected_file
-                    selected_file=$(echo "$changed_files" | gum filter --prompt="👇 Select a file to view its diff (Press Esc to exit)" --height=20 --indicator="→" --placeholder="")
+                    # Loop to allow viewing multiple diffs
+                    while true; do
+                        local selected_file
+                        selected_file=$(echo "$changed_files" | gum filter --prompt="👇 Select a file to view its diff (Press Esc to exit)" --height=20 --indicator="→" --placeholder="")
 
-                    if [ -z "$selected_file" ]; then
-                        break
-                    fi
-                    
-                    # Show the diff for the selected file, piped to `less`.
-                    "$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" --no-pager diff --color=always "$hash_before" "$hash_after" -- "$selected_file" | less -RX
-                done
-            fi
-            ;;
-        "Revert Files to 'After' State ("*)
-            _revert_item_to_hash "$item_type" "$item_name" "$hash_after" "$wp_content_dir" "$CHECKPOINT_REPO_DIR" "$hash_after"
-            ;;
-        "Revert Files to 'Before' State ("*)
-             if [ -z "$hash_before" ]; then
-                echo "❌ Cannot revert: 'Before' state does not exist (likely the first checkpoint)." >&2
-                return 1
-             fi
-            _revert_item_to_hash "$item_type" "$item_name" "$hash_before" "$wp_content_dir" "$CHECKPOINT_REPO_DIR" "$hash_after"
-            ;;
-        "Cancel"|*)
-            echo "Operation cancelled."
-            return 0
-            ;;
-    esac
+                        if [ -z "$selected_file" ]; then
+                            break
+                        fi
+                        
+                        # Show the diff for the selected file, piped to `less`.
+                        "$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" --no-pager diff --color=always "$hash_before" "$hash_after" -- "$selected_file" | less -RX
+                    done
+                fi
+                ;;
+            "Revert Files to 'After' State ("*)
+                _revert_item_to_hash "$item_type" "$item_name" "$hash_after" "$wp_content_dir" "$CHECKPOINT_REPO_DIR" "$hash_after"
+                ;;
+            "Revert Files to 'Before' State ("*)
+                 if [ -z "$hash_before" ]; then
+                    echo "❌ Cannot revert: 'Before' state does not exist (likely the first checkpoint)." >&2
+                    return 1
+                 fi
+                _revert_item_to_hash "$item_type" "$item_name" "$hash_before" "$wp_content_dir" "$CHECKPOINT_REPO_DIR" "$hash_after"
+                ;;
+            "Back to item list"|*)
+                # Do nothing, the loop will continue to the next iteration.
+                continue
+                ;;
+        esac
+    done
 }
 
 # ----------------------------------------------------
