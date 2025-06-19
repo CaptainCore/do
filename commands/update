@@ -98,7 +98,7 @@ foreach($list as $item) {
 
     local prompt_text="${1:-Select an update to inspect}"
     local selected_display
-    selected_display=$(printf "%s\n" "${display_items[@]}" | gum filter --height=20 --prompt="👇 $prompt_text" --indicator="→" --placeholder="")
+    selected_display=$(printf "%s\n" "${display_items[@]}" | "$GUM_CMD" filter --height=20 --prompt="👇 $prompt_text" --indicator="→" --placeholder="")
 
     if [ -z "$selected_display" ]; then
         echo "" # Return empty for cancellation

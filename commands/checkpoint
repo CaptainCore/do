@@ -369,13 +369,24 @@ foreach($list as $item) {
     local display_items=()
     local data_items=()
 
+    # Get terminal width for dynamic padding
+    local term_width; term_width=$(tput cols)
+    local hash_col_width=9 # "xxxxxxx |"
+    local counts_col_width=20 # "xx Themes, xx Plugins |"
+    
+    # Calculate available width for the timestamp column
+    local timestamp_col_width=$((term_width - hash_col_width - counts_col_width - 5)) # 5 for buffers
+    # Set a reasonable minimum and maximum
+    if [ "$timestamp_col_width" -lt 20 ]; then timestamp_col_width=20; fi
+    if [ "$timestamp_col_width" -gt 30 ]; then timestamp_col_width=30; fi
+
     while IFS='|' read -r formatted_timestamp hash counts_str diff_stats; do
-        # Sanitize the hash to remove any potential leading/trailing whitespace or invisible characters.
         hash=$(echo "$hash" | tr -d '[:space:]')
         if [ -z "$hash" ]; then continue; fi
 
+        # Use the new dynamic width for the timestamp
         local display_string
-        display_string=$(printf "%-28s | %s | %-18s | %s" \
+        display_string=$(printf "%-${timestamp_col_width}s | %s | %-18s | %s" \
             "$formatted_timestamp" "${hash:0:7}" "$counts_str" "$diff_stats")
         
         display_items+=("$display_string")
@@ -496,7 +507,6 @@ function checkpoint_revert() {
     echo "💡 Note: This action reverts files only. Database changes, plugin/theme activation status, and WordPress core version are not affected."
 }
 
-
 # ----------------------------------------------------
 #  Shows the diff between two checkpoints or one checkpoint and its parent.
 # ----------------------------------------------------
@@ -525,14 +535,15 @@ function checkpoint_show() {
         return 1
     fi
 
-    local manifest_before="{}" 
+    local manifest_before="{}"
     if [ -n "$hash_before" ]; then
         manifest_before=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" show "$hash_before:manifest.json" 2>/dev/null)
         if [ -z "$manifest_before" ]; then
             echo "⚠️ Warning: Could not find manifest for 'before' hash '$hash_before'. Comparing against an empty state." >&2
+            manifest_before="{}"
         fi
     fi
-    
+
     # Get a list of themes and plugins that have actual file changes.
     local changed_files_list
     changed_files_list=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" diff --name-only "$hash_before" "$hash_after" -- 'plugins/' 'themes/' 'mu-plugins/')
@@ -549,110 +560,121 @@ function checkpoint_show() {
     changed_items_str=$(printf "%s\n" "${items_with_file_changes[@]}" | sort -u | tr '\n' ',' | sed 's/,$//')
 
     # --- 1. Generate list of ALL items from PHP ---
+    export MANIFEST_AFTER_JSON="$manifest_after"
+    export MANIFEST_BEFORE_JSON="$manifest_before"
+    export CHANGED_ITEMS_STR="$changed_items_str"
+
     local php_script
-    read -r -d '' php_script <<PHP
+    read -r -d '' php_script <<'PHP'
 <?php
 // This PHP script compares two manifest files (before and after)
-// and generates a human-readable list of changes.
+// and generates a human-readable list of changes with robust padding.
 
-\$manifest_after_json = <<<'EOT'
-$manifest_after
-EOT;
-\$manifest_before_json = <<<'EOT'
-$manifest_before
-EOT;
-\$changed_items_str = '$changed_items_str';
+$manifest_after_json = getenv('MANIFEST_AFTER_JSON');
+$manifest_before_json = getenv('MANIFEST_BEFORE_JSON');
+$changed_items_str = getenv('CHANGED_ITEMS_STR');
 
-\$after_data = json_decode(\$manifest_after_json, true);
-\$before_data = json_decode(\$manifest_before_json, true);
-\$items_with_file_changes = !empty(\$changed_items_str) ? explode(',', \$changed_items_str) : [];
+$after_data = json_decode($manifest_after_json, true);
+$before_data = json_decode($manifest_before_json, true);
+$items_with_file_changes = !empty($changed_items_str) ? explode(',', $changed_items_str) : [];
 
-function process_item_diff(\$item_type, \$after_items, \$before_items, \$items_with_file_changes) {
-    \$after_map = [];
-    if (is_array(\$after_items)) { foreach (\$after_items as \$item) { \$after_map[\$item["name"]] = \$item; } }
+function process_item_diff($item_type, $after_items, $before_items, $items_with_file_changes) {
+    $after_map = [];
+    if (is_array($after_items)) { foreach ($after_items as $item) { if(isset($item["name"])) $after_map[$item["name"]] = $item; } }
 
-    \$before_map = [];
-    if (is_array(\$before_items)) { foreach (\$before_items as \$item) { \$before_map[\$item["name"]] = \$item; } }
+    $before_map = [];
+    if (is_array($before_items)) { foreach ($before_items as $item) { if(isset($item["name"])) $before_map[$item["name"]] = $item; } }
 
-    \$all_names = array_unique(array_merge(array_keys(\$after_map), array_keys(\$before_map)));
+    $all_names = array_unique(array_merge(array_keys($after_map), array_keys($before_map)));
+    sort($all_names);
     
-    \$output_lines = [];
+    $output_lines = [];
+    $max_len = 0;
 
-    foreach (\$all_names as \$name) {
-        \$has_changed = false;
-        \$change_parts = [];
-        \$after_item = \$after_map[\$name] ?? null;
-        \$before_item = \$before_map[\$name] ?? null;
+    foreach ($all_names as $name) {
+        if(empty($name)) continue;
 
-        // Compare versions and statuses
-        if (\$after_item && \$before_item) {
-            if (isset(\$after_item["version"]) && isset(\$before_item["version"]) && \$after_item["version"] !== \$before_item["version"]) {
-                \$change_parts[] = "version " . \$before_item["version"] . " -> " . \$after_item["version"];
-                \$has_changed = true;
-            }
-            if (isset(\$after_item["status"]) && isset(\$before_item["status"]) && \$after_item["status"] !== \$before_item["status"]) {
-                \$change_parts[] = "status " . \$before_item["status"] . " -> " . \$after_item["status"];
-                \$has_changed = true;
-            }
-            // Check for file changes only if the item exists in both states
-            if (in_array(\$name, \$items_with_file_changes, true)) {
-                \$change_parts[] = "files changed";
-                \$has_changed = true;
-            }
-        // Item was added
-        } elseif (\$after_item && !\$before_item) {
-            \$change_parts[] = "installed";
-            if(isset(\$after_item["version"])) \$change_parts[] = "v" . \$after_item["version"];
-            \$has_changed = true;
-        // Item was deleted
-        } elseif (!\$after_item && \$before_item) {
-            \$change_parts[] = "deleted";
-            \$has_changed = true;
-        }
+        $has_changed = false;
+        $change_parts = [];
+        $after_item = $after_map[$name] ?? null;
+        $before_item = $before_map[$name] ?? null;
 
-        \$item_for_details = \$after_item ?: \$before_item;
-        \$title = \$item_for_details["title"] ?? \$name;
-        
-        \$prefix = \$has_changed ? "ℹ️  " : "   ";
-        
-        if (\$has_changed) {
-            \$details_string = implode(", ", array_unique(\$change_parts));
+        if ($after_item && $before_item) {
+            if (($after_item["version"] ?? null) !== ($before_item["version"] ?? null)) {
+                $change_parts[] = "version " . ($before_item["version"] ?? 'N/A') . " -> " . ($after_item["version"] ?? 'N/A');
+                $has_changed = true;
+            }
+            if (($after_item["status"] ?? null) !== ($before_item["status"] ?? null)) {
+                $change_parts[] = "status " . ($before_item["status"] ?? 'N/A') . " -> " . ($after_item["status"] ?? 'N/A');
+                $has_changed = true;
+            }
+            if (in_array($name, $items_with_file_changes, true)) {
+                $change_parts[] = "files changed";
+                $has_changed = true;
+            }
+        } elseif ($after_item) {
+            $change_parts[] = "installed";
+            if(isset($after_item["version"])) $change_parts[] = "v" . $after_item["version"];
+            $has_changed = true;
         } else {
-            \$version = \$item_for_details["version"] ?? 'N/A';
-            \$status = \$item_for_details["status"] ?? 'N/A';
-            \$details_string = "v\$version, \$status";
+            $change_parts[] = "deleted";
+            $has_changed = true;
         }
 
-        \$display_string = sprintf('%s[%s]: %s (%s)', \$prefix, \$item_type, \$title, \$details_string);
-        \$data_string = strtolower(\$item_type) . "|\$name";
+        $item_for_details = $after_item ?: $before_item;
+        $title = $item_for_details["title"] ?? $name;
+        
+        $prefix = $has_changed ? "ℹ️  " : "   ";
+        
+        if ($has_changed) {
+            $details_string = implode(", ", array_unique($change_parts));
+        } else {
+            $version = $item_for_details["version"] ?? 'N/A';
+            $status = $item_for_details["status"] ?? 'N/A';
+            $details_string = "v$version, $status";
+        }
 
-        \$output_lines[] = [
-            'has_changed' => \$has_changed,
-            'display_string' => \$display_string,
-            'data_string' => \$data_string,
+        $text_part = sprintf('[%s]: %s', $item_type, $title);
+        
+        $output_lines[] = [
+            'has_changed' => $has_changed,
+            'prefix' => $prefix,
+            'text_part' => $text_part,
+            'details' => "($details_string)",
+            'data_string' => strtolower($item_type) . "|$name",
         ];
+        
+        $len = mb_strlen($text_part);
+        if ($len > $max_len) {
+            $max_len = $len;
+        }
     }
 
-    // Sort changed items to the top, then by type and name.
-    usort(\$output_lines, function (\$a, \$b) {
-        if (\$a['has_changed'] !== \$b['has_changed']) {
-            return \$b['has_changed'] <=> \$a['has_changed']; // true (1) comes before false (0)
+    usort($output_lines, function ($a, $b) {
+        if ($a['has_changed'] !== $b['has_changed']) {
+            return $b['has_changed'] <=> $a['has_changed'];
         }
-        return strcmp(\$a['data_string'], \$b['data_string']); // Sort by "type|name"
+        return strcmp($a['data_string'], $b['data_string']);
     });
 
-    foreach (\$output_lines as \$line) {
-        // Prepend a zero-width space to prevent gum from trimming leading whitespace.
-        echo "\u{200B}" . \$line['display_string'] . '|' . \$line['data_string'] . "\n";
+    foreach ($output_lines as $line) {
+        $padding = str_repeat(' ', $max_len - mb_strlen($line['text_part']) + 2);
+        $full_display = "\u{200B}" . $line['prefix'] . $line['text_part'] . $padding . $line['details'];
+        echo $full_display . '|' . $line['data_string'] . "\n";
     }
 }
 
-process_item_diff('Theme', \$after_data['themes'] ?? [], \$before_data['themes'] ?? [], \$items_with_file_changes);
-process_item_diff('Plugin', \$after_data['plugins'] ?? [], \$before_data['plugins'] ?? [], \$items_with_file_changes);
+process_item_diff('Theme', $after_data['themes'] ?? [], $before_data['themes'] ?? [], $items_with_file_changes);
+process_item_diff('Plugin', $after_data['plugins'] ?? [], $before_data['plugins'] ?? [], $items_with_file_changes);
 PHP
 
     local diff_data
     diff_data=$(echo "$php_script" | wp eval-file - 2>/dev/null)
+
+    # Unset the environment variables
+    unset MANIFEST_AFTER_JSON
+    unset MANIFEST_BEFORE_JSON
+    unset CHANGED_ITEMS_STR
 
     if [ -z "$diff_data" ]; then
         echo "✅ No manifest changes found between checkpoints ${hash_before:0:7} and ${hash_after:0:7}."
