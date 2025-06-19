@@ -77,14 +77,15 @@ function _ensure_checkpoint_setup() {
 # ----------------------------------------------------
 function _generate_manifest() {
     local output_file="$1"
-    if [ -z "$output_file" ]; then
-        echo "Error: No output file provided to _generate_manifest." >&2
+    if [ -z "$output_file" ];
+then
+        echo "Error: No output file provided to _generate_manifest."  >&2
         return 1
     fi
 
-    local core_version; core_version=$(wp core version --skip-plugins --skip-themes)
-    local plugins; plugins=$(wp plugin list --format=json --skip-plugins --skip-themes)
-    local themes; themes=$(wp theme list --format=json --skip-plugins --skip-themes)
+    local core_version; core_version=$(wp core version --skip-plugins --skip-themes) 
+    local plugins; plugins=$(wp plugin list --fields=name,title,status,version,auto_update --format=json --skip-plugins --skip-themes)
+    local themes; themes=$(wp theme list --fields=name,title,status,version,auto_update --format=json --skip-plugins --skip-themes)
 
     # Manually create JSON to avoid extra dependencies
     cat <<EOF > "$output_file"
