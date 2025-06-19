@@ -3,13 +3,26 @@
 #  Handles WordPress core, theme, and plugin updates.
 # ----------------------------------------------------
 
-UPDATE_LOGS_DIR="../private/checkpoints/updates"
-UPDATE_LOGS_LIST_FILE="$UPDATE_LOGS_DIR/list.json"
+UPDATE_LOGS_DIR=""
+UPDATE_LOGS_LIST_FILE=""
 
 # ----------------------------------------------------
 #  Ensures update directories and lists exist.
 # ----------------------------------------------------
 function _ensure_update_setup() {
+    # Exit if already initialized
+    if [[ -n "$UPDATE_LOGS_DIR" ]]; then return 0; fi
+
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        return 1
+    fi
+
+    # Using the checkpoint base for consistency as updates are linked to checkpoints
+    local checkpoint_base_dir="${private_dir}/checkpoints"
+    UPDATE_LOGS_DIR="${checkpoint_base_dir}/updates"
+    UPDATE_LOGS_LIST_FILE="$UPDATE_LOGS_DIR/list.json"
+
     mkdir -p "$UPDATE_LOGS_DIR"
     if [ ! -f "$UPDATE_LOGS_LIST_FILE" ]; then
         echo "[]" > "$UPDATE_LOGS_LIST_FILE"
@@ -17,57 +30,153 @@ function _ensure_update_setup() {
 }
 
 # ----------------------------------------------------
-#  Lists all past updates with detailed summaries.
+#  (Helper) Lets the user select an update log from the list.
 # ----------------------------------------------------
-function update_list() {
-    if ! setup_gum || ! setup_git; then return 1; fi
+function _select_update_log() {
     _ensure_update_setup
 
     if [ ! -s "$UPDATE_LOGS_LIST_FILE" ]; then
-        echo "ℹ️ No update logs found."
-        return 0
+        echo "ℹ️ No update logs found. Run '_do update all' to create one." >&2
+        return 1
     fi
-    
-    echo "🔎 Analyzing update logs... (This may take a moment)"
 
-    # Use PHP to read the list of update logs
+    # Use PHP to read the detailed list and check format
     local php_script_read_list='
 <?php
 $list_file = "%s";
 $list = json_decode(file_get_contents($list_file), true);
-if (!is_array($list) || empty($list)) { return; }
+
+if (!is_array($list) || empty($list)) {
+    echo "EMPTY";
+    return;
+}
+
+// Check if the first item has the new detailed format.
+if (!isset($list[0]["formatted_timestamp"])) {
+    echo "NEEDS_GENERATE";
+    return;
+}
+
 foreach($list as $item) {
-    if (isset($item["timestamp"]) && isset($item["before"]) && isset($item["after"])) {
-        // Output format: timestamp|hash_before|hash_after
-        echo $item["timestamp"] . "|" . $item["before"] . "|" . $item["after"] . "\n";
+    if (isset($item["formatted_timestamp"]) && isset($item["hash_before"]) && isset($item["hash_after"]) && isset($item["counts_str"]) && isset($item["diff_stats"])) {
+        // Output format: formatted_timestamp|hash_before|hash_after|counts_str|diff_stats
+        echo $item["formatted_timestamp"] . "|" . $item["hash_before"] . "|" . $item["hash_after"] . "|" . $item["counts_str"] . "|" . $item["diff_stats"] . "\n";
     }
 }
 '
     local php_script; php_script=$(printf "$php_script_read_list" "$UPDATE_LOGS_LIST_FILE")
     local update_entries; update_entries=$(echo "$php_script" | wp eval-file -)
 
-    # This check prevents the script from failing if no update entries are found.
-    if [ -z "$update_entries" ]; then
-        echo "ℹ️ No update logs found."
-        return 0
+    if [[ "$update_entries" == "EMPTY" ]]; then
+        echo "ℹ️ No update logs available to select." >&2; return 1;
+    elif [[ "$update_entries" == "NEEDS_GENERATE" ]]; then
+        echo "⚠️ The update log list needs to be generated for faster display." >&2
+        echo "Please run: _do update list-generate" >&2
+        return 1
     fi
 
     local display_items=()
     local data_items=()
+
+    while IFS='|' read -r formatted_timestamp hash_before hash_after counts_str diff_stats; do
+        hash_before=$(echo "$hash_before" | tr -d '[:space:]')
+        hash_after=$(echo "$hash_after" | tr -d '[:space:]')
+        if [ -z "$hash_before" ] || [ -z "$hash_after" ]; then continue; fi
+
+        local display_string
+        display_string=$(printf "%-28s | %s -> %s | %-18s | %s" \
+            "$formatted_timestamp" "${hash_before:0:7}" "${hash_after:0:7}" "$counts_str" "$diff_stats")
+        
+        display_items+=("$display_string")
+        data_items+=("$hash_before|$hash_after")
+    done <<< "$update_entries"
     
-    # Process each entry to build the detailed list for gum
+    if [ ${#display_items[@]} -eq 0 ]; then
+      echo "❌ No valid update entries to display." >&2
+      return 1
+    fi
+
+    local prompt_text="${1:-Select an update to inspect}"
+    local selected_display
+    selected_display=$(printf "%s\n" "${display_items[@]}" | gum filter --height=20 --prompt="👇 $prompt_text" --indicator="→" --placeholder="")
+
+    if [ -z "$selected_display" ]; then
+        echo "" # Return empty for cancellation
+        return 0
+    fi
+
+    local selected_index=-1
+    for i in "${!display_items[@]}"; do
+       if [[ "${display_items[$i]}" == "$selected_display" ]]; then
+           selected_index=$i
+           break
+       fi
+    done
+
+    if [ "$selected_index" -ne -1 ]; then
+        echo "${data_items[$selected_index]}"
+        return 0
+    else
+        echo "❌ Error: Could not find selected update." >&2
+        return 1
+    fi
+}
+
+
+# ----------------------------------------------------
+#  Generates a detailed list of updates for faster access.
+# ----------------------------------------------------
+function update_list_generate() {
+    if ! setup_gum || ! setup_git; then return 1; fi
+    _ensure_checkpoint_setup # This sets up repo path as well
+    _ensure_update_setup
+
+    local php_script_read_list='
+<?php
+$list_file = "%s";
+if (!file_exists($list_file)) { return; }
+$list = json_decode(file_get_contents($list_file), true);
+if (!is_array($list) || empty($list)) { return; }
+foreach($list as $item) {
+    // Read from both simple and potentially detailed formats
+    $timestamp = $item["timestamp"] ?? "N/A";
+    $hash_before = $item["before"] ?? $item["hash_before"] ?? null;
+    $hash_after = $item["after"] ?? $item["hash_after"] ?? null;
+
+    if ($timestamp && $hash_before && $hash_after) {
+        echo "$timestamp|$hash_before|$hash_after\n";
+    }
+}
+'
+    local php_script; php_script=$(printf "$php_script_read_list" "$UPDATE_LOGS_LIST_FILE")
+    local update_entries; update_entries=$(echo "$php_script" | wp eval-file -)
+
+    if [ -z "$update_entries" ]; then
+        echo "ℹ️ No update logs found to generate a list from."
+        return 0
+    fi
+    
+    echo "🔎 Generating detailed update list... (This may take a moment)"
+    local detailed_items=()
+
     while IFS='|' read -r timestamp hash_before hash_after; do
-        # Safeguard against empty lines from the pipe
-        if [ -z "$timestamp" ] || [ -z "$hash_before" ] || [ -z "$hash_after" ]; then
+        hash_before=$(echo "$hash_before" | tr -d '[:space:]')
+        hash_after=$(echo "$hash_after" | tr -d '[:space:]')
+        if [ -z "$hash_before" ] || [ -z "$hash_after" ]; then continue; fi
+
+        # Validate that both commits exist before proceeding
+        if ! "$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" cat-file -e "${hash_before}^{commit}" &>/dev/null; then
+            echo "⚠️ Warning: Could not find 'before' commit '$hash_before'. Skipping entry." >&2
+            continue
+        fi
+        if ! "$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" cat-file -e "${hash_after}^{commit}" &>/dev/null; then
+            echo "⚠️ Warning: Could not find 'after' commit '$hash_after'. Skipping entry." >&2
             continue
         fi
 
-        hash_before=$(echo "$hash_before" | tr -d '[:space:]')
-        hash_after=$(echo "$hash_after" | tr -d '[:space:]')
-        
         local manifest_after; manifest_after=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" show "$hash_after:manifest.json" 2>/dev/null)
         if [ -z "$manifest_after" ]; then
-            echo "⚠️ Warning: Could not find manifest for hash '$hash_after'. Skipping entry." >&2
+            echo "⚠️ Warning: Could not find manifest for 'after' hash '$hash_after'. Skipping entry." >&2
             continue
         fi
 
@@ -79,16 +188,14 @@ EOT;
 $data = json_decode($manifest_json, true);
 $theme_count = isset($data["themes"]) && is_array($data["themes"]) ? count($data["themes"]) : 0;
 $plugin_count = isset($data["plugins"]) && is_array($data["plugins"]) ? count($data["plugins"]) : 0;
-echo "$theme_count Th, $plugin_count Pl";
+echo "$theme_count Themes, $plugin_count Plugins";
 '
         local counts_script; counts_script=$(printf "$php_get_counts" "$manifest_after")
         local counts_str; counts_str=$(echo "$counts_script" | wp eval-file -)
         
         local diff_stats
         diff_stats=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" diff --shortstat "$hash_before" "$hash_after" -- 'plugins/' 'themes/' 'mu-plugins/' | sed 's/^[ \t]*//')
-        if [ -z "$diff_stats" ]; then
-            diff_stats="No file changes."
-        fi
+        if [ -z "$diff_stats" ]; then diff_stats="No file changes"; fi
 
         local formatted_timestamp
         if [[ "$(uname)" == "Darwin" ]]; then
@@ -97,45 +204,59 @@ echo "$theme_count Th, $plugin_count Pl";
             formatted_timestamp=$(date -d "$timestamp" "+%a, %b %d, %Y, %-I:%M %p")
         fi
 
-        local display_string
-        display_string=$(printf "%-28s | %s -> %s | %-18s | %s" \
-            "$formatted_timestamp" "${hash_before:0:7}" "${hash_after:0:7}" "$counts_str" "$diff_stats")
+        local json_item
+        json_item=$(printf '{"hash_before": "%s", "hash_after": "%s", "timestamp": "%s", "formatted_timestamp": "%s", "counts_str": "%s", "diff_stats": "%s"}' \
+            "$hash_before" "$hash_after" "$timestamp" "$formatted_timestamp" "$counts_str" "$diff_stats")
+        
+        detailed_items+=("$json_item")
 
-        display_items+=("$display_string")
-        data_items+=("$hash_before|$hash_after")
     done <<< "$update_entries"
-
-    if [ ${#display_items[@]} -eq 0 ]; then
-      echo "No valid update entries to display."
-      return 1
-    fi
     
-    local selected_display
-    selected_display=$(printf "%s\n" "${display_items[@]}" | gum filter --height=20 --prompt="👇 Select an update to inspect" --indicator="→" --placeholder="")
+    local full_json="["
+    full_json+=$(IFS=,; echo "${detailed_items[*]}")
+    full_json+="]"
 
-    if [ -z "$selected_display" ]; then
+    local php_write_script='
+<?php
+$list_file = "%s";
+$json_data = <<<'EOT'
+%s
+EOT;
+$data = json_decode($json_data, true);
+file_put_contents($list_file, json_encode($data, JSON_PRETTY_PRINT));
+'
+    local write_script; write_script=$(printf "$php_write_script" "$UPDATE_LOGS_LIST_FILE" "$full_json")
+    if echo "$write_script" | wp eval-file -; then
+        echo "✅ Detailed update list saved to $UPDATE_LOGS_LIST_FILE"
+    else
+        echo "❌ Error: Failed to write detailed update list."
+    fi
+}
+
+# ----------------------------------------------------
+#  Lists all past updates from the pre-generated list.
+# ----------------------------------------------------
+function update_list() {
+    if ! setup_gum || ! setup_git; then return 1; fi
+    _ensure_checkpoint_setup # Ensures repo path is set
+    
+    local selected_hashes
+    selected_hashes=$(_select_update_log "Select an update to inspect")
+
+    if [ -z "$selected_hashes" ]; then
         echo "No update selected."
         return 0
     fi
-    
-    local selected_index=-1
-    for i in "${!display_items[@]}"; do
-       if [[ "${display_items[$i]}" == "$selected_display" ]]; then
-           selected_index=$i
-           break
-       fi
-    done
-
-    if [ "$selected_index" -ne -1 ]; then
-        local selected_data=${data_items[$selected_index]}
-        local selected_hash_before; selected_hash_before=$(echo "$selected_data" | cut -d'|' -f1)
-        local selected_hash_after; selected_hash_after=$(echo "$selected_data" | cut -d'|' -f2)
-
-        checkpoint_show "$selected_hash_after" "$selected_hash_before"
-    else
-        echo "❌ Error: Could not extract hashes from selected entry."
+    if [ $? -ne 0 ]; then
+        return 1 # Error already printed by helper
     fi
+
+    local selected_hash_before; selected_hash_before=$(echo "$selected_hashes" | cut -d'|' -f1)
+    local selected_hash_after; selected_hash_after=$(echo "$selected_hashes" | cut -d'|' -f2)
+
+    checkpoint_show "$selected_hash_after" "$selected_hash_before"
 }
+
 
 # ----------------------------------------------------
 #  Runs the full update process.
@@ -180,10 +301,10 @@ function run_update_all() {
         return 0
     fi
     
-    echo "   - Step 4/5: Generating update log..."
+    echo "   - Step 4/5: Generating update log entry..."
     local timestamp; timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-    echo "   - Step 5/5: Updating master list..."
+    # This creates a simple entry. `update list-generate` will enrich it later.
     local php_list_template='
 <?php
 $list_file = "%s";
@@ -193,8 +314,18 @@ $timestamp = "%s";
 $list = file_exists($list_file) ? json_decode(file_get_contents($list_file), true) : [];
 if (!is_array($list)) { $list = []; }
 $new_entry = ["before" => $before, "after" => $after, "timestamp" => $timestamp];
-array_unshift($list, $new_entry);
-echo json_encode($list, JSON_PRETTY_PRINT);
+// To keep it simple, we just read the simple format and add to it.
+// The list-generate command is responsible for creating the detailed format.
+$simple_list = [];
+foreach($list as $item) {
+    $simple_list[] = [
+        "before" => $item["before"] ?? $item["hash_before"] ?? null,
+        "after" => $item["after"] ?? $item["hash_after"] ?? null,
+        "timestamp" => $item["timestamp"] ?? null
+    ];
+}
+array_unshift($simple_list, $new_entry);
+echo json_encode($simple_list, JSON_PRETTY_PRINT);
 '
     local php_list_script; php_list_script=$(printf "$php_list_template" "$UPDATE_LOGS_LIST_FILE" "$hash_before" "$hash_after" "$timestamp")
     
@@ -205,6 +336,9 @@ echo json_encode($list, JSON_PRETTY_PRINT);
         echo "❌ Error: Failed to update master update list." >&2
         rm "$temp_list_file"
     fi
+
+    echo "   - Step 5/5: Regenerating detailed update list..."
+    update_list_generate > /dev/null
 
     echo "✅ Update process complete."
 }

@@ -430,9 +430,10 @@ function show_command_help() {
             echo "Usage: _do update <subcommand>"
             echo
             echo "Subcommands:"
-            echo "  all           Creates a 'before' checkpoint, runs all updates, creates an"
-            echo "                'after' checkpoint, and logs the changes."
-            echo "  list          Shows a list of past updates to inspect."
+            echo "  all                 Creates a 'before' checkpoint, runs all updates, creates an"
+            echo "                      'after' checkpoint, and logs the changes."
+            echo "  list                Shows a list of past updates to inspect from the generated list."
+            echo "  list-generate       Generates a detailed list of all updates for fast viewing."
             ;;
         version)
             echo "Displays the current version of the _do script."
@@ -756,14 +757,21 @@ function main() {
             ;;
         update)
             local subcommand="${positional_args[1]}"
-            if [[ "$all_flag" == "true" || "$subcommand" == "all" ]]; then
-                run_update_all
-            elif [[ "$subcommand" == "list" ]]; then
-                update_list
-            else
-                show_command_help "update"
-                exit 1
-            fi
+            case "$subcommand" in
+                all)
+                    run_update_all
+                    ;;
+                list)
+                    update_list
+                    ;;
+                list-generate)
+                    update_list_generate
+                    ;;
+                *)
+                    show_command_help "update"
+                    exit 1
+                    ;;
+            esac
             ;;
         version|--version|-v)
             show_version
