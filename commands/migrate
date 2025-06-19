@@ -24,13 +24,10 @@ function migrate_site() {
     fi
     
     # --- Find Private Directory ---
-    local private_dir=""
-    if [ -d "_wpeprivate" ]; then private_dir="${home_directory}/_wpeprivate"; fi
-    if [ -d "../private" ]; then private_dir=$(cd ../private && pwd); fi
-    if [ -d "../tmp" ]; then private_dir=$(cd ../tmp && pwd); fi
-    cd "$home_directory" #  Ensure we are back
-    if [[ -z "$private_dir" ]]; then
-        echo "❌ Error: Can't locate a private folder. Migration cancelled." >&2
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        # Error message is handled by the helper function.
+        echo "❌ Error: Can't locate a suitable private folder. Migration cancelled." >&2 
         return 1
     fi
     

@@ -4,9 +4,9 @@
 # ----------------------------------------------------
 
 # --- Checkpoint Base Directory ---
-CHECKPOINT_BASE_DIR="../private/checkpoints"
-CHECKPOINT_REPO_DIR="$CHECKPOINT_BASE_DIR/repo"
-CHECKPOINT_LIST_FILE="$CHECKPOINT_BASE_DIR/list.json"
+CHECKPOINT_BASE_DIR=""
+CHECKPOINT_REPO_DIR=""
+CHECKPOINT_LIST_FILE=""
 
 # ----------------------------------------------------
 #  (Helper) Reverts a specific item's files to a given checkpoint hash.
@@ -66,9 +66,21 @@ function _revert_item_to_hash() {
 #  Ensures checkpoint directories and lists exist.
 # ----------------------------------------------------
 function _ensure_checkpoint_setup() {
+    # Exit if already initialized
+    if [[ -n "$CHECKPOINT_BASE_DIR" ]]; then return 0; fi
+
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        return 1
+    fi
+
+    CHECKPOINT_BASE_DIR="${private_dir}/checkpoints"
+    CHECKPOINT_REPO_DIR="$CHECKPOINT_BASE_DIR/repo"
+    CHECKPOINT_LIST_FILE="$CHECKPOINT_BASE_DIR/list.json"
+
     mkdir -p "$CHECKPOINT_REPO_DIR"
     if [ ! -f "$CHECKPOINT_LIST_FILE" ]; then
-        echo "[]" > "$CHECKPOINT_LIST_FILE"
+        echo "[]" > "$CHECKPOINT_LIST_FILE" 
     fi
 }
 

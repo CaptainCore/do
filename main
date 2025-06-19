@@ -19,6 +19,89 @@ CWEBP_CMD=""
 # --- Helper Functions ---
 
 # ----------------------------------------------------
+#  Intelligently finds or creates a private directory.
+#  Sets a global variable CAPTAINCORE_PRIVATE_DIR and echoes the path.
+# ----------------------------------------------------
+function _get_private_dir() {
+    # Return immediately if already found
+    if [[ -n "$CAPTAINCORE_PRIVATE_DIR" ]]; then
+        echo "$CAPTAINCORE_PRIVATE_DIR"
+        return 0
+    fi
+
+    # --- Tier 1: Preferred WP-CLI Method ---
+    if command -v wp &>/dev/null; then
+        local wp_config_path
+        wp_config_path=$(wp config path --quiet 2>/dev/null)
+        if [ -n "$wp_config_path" ] && [ -f "$wp_config_path" ]; then
+            local wp_root
+            wp_root=$(dirname "$wp_config_path")
+            local parent_dir
+            parent_dir=$(dirname "$wp_root")
+
+            # Check for WP Engine's private directory first
+            if [ -d "${parent_dir}/_wpeprivate" ]; then
+                CAPTAINCORE_PRIVATE_DIR="${parent_dir}/_wpeprivate"
+                echo "$CAPTAINCORE_PRIVATE_DIR"
+                return 0
+            fi
+            # Check for a standard ../private directory
+            if [ -d "${parent_dir}/private" ]; then
+                CAPTAINCORE_PRIVATE_DIR="${parent_dir}/private"
+                echo "$CAPTAINCORE_PRIVATE_DIR"
+                return 0
+            fi
+            # Try to create a ../private directory
+            if mkdir -p "${parent_dir}/private"; then
+                CAPTAINCORE_PRIVATE_DIR="${parent_dir}/private"
+                echo "$CAPTAINCORE_PRIVATE_DIR"
+                return 0
+            fi
+            # Fallback to ../tmp if it exists
+            if [ -d "${parent_dir}/tmp" ]; then
+                CAPTAINCORE_PRIVATE_DIR="${parent_dir}/tmp"
+                echo "$CAPTAINCORE_PRIVATE_DIR"
+                return 0
+            fi
+        fi
+    fi
+
+    # --- Tier 2: Manual Fallback (if WP-CLI fails or not in a WP install) ---
+    local current_dir
+    current_dir=$(pwd)
+    if [ -d "${current_dir}/_wpeprivate" ]; then # WPE check 
+        CAPTAINCORE_PRIVATE_DIR="${current_dir}/_wpeprivate"
+        echo "$CAPTAINCORE_PRIVATE_DIR"
+        return 0
+    fi
+    if [ -d "../private" ]; then # Relative private check 
+        CAPTAINCORE_PRIVATE_DIR=$(cd ../private && pwd)
+        echo "$CAPTAINCORE_PRIVATE_DIR"
+        return 0
+    fi
+    if mkdir -p "../private"; then # Attempt to create relative private
+        CAPTAINCORE_PRIVATE_DIR=$(cd ../private && pwd)
+        echo "$CAPTAINCORE_PRIVATE_DIR"
+        return 0
+    fi
+    if [ -d "../tmp" ]; then # Relative tmp check 
+        CAPTAINCORE_PRIVATE_DIR=$(cd ../tmp && pwd)
+        echo "$CAPTAINCORE_PRIVATE_DIR"
+        return 0
+    fi
+
+    # --- Tier 3: Last Resort Fallback to Home Directory ---
+    if mkdir -p "$HOME/private"; then # Home directory check 
+        CAPTAINCORE_PRIVATE_DIR="$HOME/private"
+        echo "$CAPTAINCORE_PRIVATE_DIR"
+        return 0
+    fi
+
+    echo "Error: Could not find or create a suitable private directory." >&2
+    return 1
+}
+
+# ----------------------------------------------------
 #  Checks for and installs 'gum' if not present. Sets GUM_CMD on success.
 # ----------------------------------------------------
 function setup_gum() {
@@ -41,9 +124,13 @@ function setup_gum() {
     fi
 
     #  If not found or not working, download it
-    echo "Required tool 'gum' not found. Installing to ~/private..." >&2
-    mkdir -p "$HOME/private"
-    cd "$HOME/private" || { echo "Error: Could not enter ~/private." >&2; return 1; }
+    echo "Required tool 'gum' not found. Installing..." >&2
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        # Error message is handled by the helper function
+        return 1
+    fi
+    cd "$private_dir" || { echo "Error: Could not enter private directory." >&2; return 1; }
 
     local gum_tarball="${gum_dir}.tar.gz"
     if ! wget --quiet "https://github.com/charmbracelet/gum/releases/download/v${GUM_VERSION}/${gum_tarball}" || ! tar -xf "${gum_tarball}"; then
