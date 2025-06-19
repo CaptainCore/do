@@ -464,6 +464,7 @@ function show_usage() {
     echo "  checkpoint          Manages versioned checkpoints of the site's manifest."
     echo "  clean               Removes unused items like inactive themes or analyzes disk usage."
     echo "  convert-to-webp     Finds and converts large images (JPG, PNG) to WebP format."
+    echo "  cron                Manages cron jobs and schedules tasks to run at specific times."
     echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
     echo "  migrate             Migrates a site from a backup URL or local file."
@@ -636,6 +637,27 @@ function main() {
                     ;;
                 *)
                     show_command_help "clean"
+                    exit 0
+                    ;;
+            esac
+            ;;
+        cron)
+            local subcommand="${positional_args[1]}"
+            case "$subcommand" in
+                enable)
+                    cron_enable
+                    ;;
+                list)
+                    cron_list
+                    ;;
+                run)
+                    cron_run
+                    ;;
+                add)
+                    cron_add "${positional_args[2]}" "${positional_args[3]}" "${positional_args[4]}"
+                    ;;
+                *)
+                    show_command_help "cron"
                     exit 0
                     ;;
             esac
