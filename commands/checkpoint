@@ -389,7 +389,7 @@ foreach($list as $item) {
 
     local prompt_text="${1:-Select a checkpoint to inspect}"
     local selected_display
-    selected_display=$(printf "%s\n" "${display_items[@]}" | gum filter --height=20 --prompt="👇 $prompt_text" --indicator="→" --placeholder="")
+    selected_display=$(printf "%s\n" "${display_items[@]}" | "$GUM_CMD" filter --height=20 --prompt="👇 $prompt_text" --indicator="→" --placeholder="")
 
     if [ -z "$selected_display" ]; then
         echo "" # Return empty for cancellation
@@ -467,7 +467,7 @@ function checkpoint_revert() {
     # Final confirmation before the revert
     echo "🚨 You are about to revert ALL themes, plugins, and mu-plugins to the state from checkpoint ${target_hash:0:7}."
     echo "This will overwrite any changes made since that checkpoint was created."
-    gum confirm "Are you sure you want to proceed?" || { echo "Revert cancelled."; return 0; }
+    "$GUM_CMD" confirm "Are you sure you want to proceed?" || { echo "Revert cancelled."; return 0; }
 
     # Get wp-content path for rsync destination
     local wp_content_dir
@@ -663,7 +663,7 @@ PHP
     while true; do
         # --- 2. Interactive Item Selection ---
         local selected_display_text
-        selected_display_text=$(echo "$diff_data" | cut -d'|' -f1 | gum filter --prompt="👇 Select item to inspect (checkpoints ${hash_before:0:7} -> ${hash_after:0:7}). Press Esc to exit." --height=20 --indicator="→" --placeholder="")
+        selected_display_text=$(echo "$diff_data" | cut -d'|' -f1 | "$GUM_CMD" filter --prompt="👇 Select item to inspect (checkpoints ${hash_before:0:7} -> ${hash_after:0:7}). Press Esc to exit." --height=20 --indicator="→" --placeholder="")
 
         if [ -z "$selected_display_text" ]; then
             # User pressed Esc, so break the loop and exit the function.
@@ -691,7 +691,7 @@ PHP
         fi
         choices+=("Back to item list")
         
-        local action; action=$(gum choose "${choices[@]}")
+        local action; action=$("$GUM_CMD" choose "${choices[@]}")
 
         # --- 5. Execute Action ---
         case "$action" in
@@ -703,14 +703,14 @@ PHP
                 changed_files=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" diff --name-only "$hash_before" "$hash_after" -- "$item_path_in_repo")
 
                 if [ -z "$changed_files" ]; then
-                    gum spin --spinner dot --title "No file changes found for '$item_name'." -- sleep 3
+                    "$GUM_CMD" spin --spinner dot --title "No file changes found for '$item_name'." -- sleep 3
                 else
                     echo "Showing file changes for '$item_name' between ${hash_before:0:7} and ${hash_after:0:7}."
 
                     # Loop to allow viewing multiple diffs
                     while true; do
                         local selected_file
-                        selected_file=$(echo "$changed_files" | gum filter --prompt="👇 Select a file to view its diff (Press Esc to exit)" --height=20 --indicator="→" --placeholder="")
+                        selected_file=$(echo "$changed_files" | "$GUM_CMD" filter --prompt="👇 Select a file to view its diff (Press Esc to exit)" --height=20 --indicator="→" --placeholder="")
 
                         if [ -z "$selected_file" ]; then
                             break
