@@ -194,24 +194,56 @@ PHP
 function cron_enable() {
     echo "Attempting to enable global cron runner..."
 
+    # Check if _do is an alias and install a persistent script if needed
     local script_path
-    script_path=$(realpath "$0")
+    # Redirect stderr to /dev/null to suppress the "not found" error from the type command
+    if [[ $(type _do 2>/dev/null) == *"alias"* ]]; then
+        echo "ℹ️ '_do' is an alias. Installing a persistent version to the private directory for cron..."
+        
+        # Use the helper to find/create the private directory
+        local private_dir
+        if ! private_dir=$(_get_private_dir); then
+            # Error message is handled by the helper function
+            return 1
+        fi
+        
+        local dest_file="$private_dir/_do"
+
+        if ! command -v curl &> /dev/null; then
+             echo "❌ Error: 'curl' is required to download the persistent script." >&2
+             return 1
+        fi
+        
+        # Download the script from the URL specified in the installation instructions
+        if ! curl -sL "https://captaincore.io/do" -o "$dest_file"; then
+            echo "❌ Error: Failed to download the _do script." >&2
+            return 1
+        fi
+        
+        chmod +x "$dest_file"
+        
+        script_path="$dest_file"
+        echo "✅ Script installed to $script_path"
+        
+    else
+        # Not an alias, so it's a physical script. Get its path.
+        script_path=$(realpath "$0")
+    fi
     
     local cron_command="bash \"$script_path\" cron run"
     local cron_job="*/10 * * * * $cron_command"
 
     # Check if the exact global command already exists
     if crontab -l 2>/dev/null | grep -Fq "$cron_command"; then
-        echo "✅ Global cron job already enabled. Nothing to do." 
+        echo "✅ Global cron job already enabled. Nothing to do."
     else
         echo "Adding new global cron job to run every 10 minutes..."
         # Add the new job to the existing crontab
-        (crontab -l 2>/dev/null; echo "$cron_job") | crontab - 
-        if [ $? -eq 0 ]; 
-        then
-            echo "✅ Global cron job successfully enabled." 
+        (crontab -l 2>/dev/null; echo "$cron_job") | crontab -
+        if [ $? -eq 0 ]; then
+            echo "✅ Global cron job successfully enabled."
         else
-            echo "❌ Error: Could not modify crontab. Please check your permissions." 
+            echo "❌ Error: Could not modify crontab. Please check your permissions."
             return 1
         fi
     fi
