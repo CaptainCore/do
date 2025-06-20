@@ -112,9 +112,32 @@ elseif ($action === 'add') {
         'command'   => $command,
         'next_run'  => $next_run_timestamp,
         'frequency' => $frequency,
-    ];
-    save_events($events);
-    echo "✅ Event '$id' added. Command: '_do $command'. Next run: " . date('Y-m-d H:i:s T', $next_run_timestamp) . "\n";
+
+elseif ($action === 'delete') {
+    $id_to_delete = $argv[2] ?? null;
+    if (!$id_to_delete) {
+        error_log('Error: No ID provided for delete action.');
+        return;
+    }
+
+    $events = get_events();
+    $updated_events = [];
+    $found = false;
+
+    foreach ($events as $event) {
+        if (isset($event['id']) && $event['id'] === $id_to_delete) {
+            $found = true;
+        } else {
+            $updated_events[] = $event;
+        }
+    }
+
+    if ($found) {
+        save_events($updated_events);
+        echo "✅ Event '$id_to_delete' deleted successfully.\n";
+    } else {
+        echo "❌ Error: Event with ID '$id_to_delete' not found.\n";
+    }
 }
 
 elseif ($action === 'update_next_run') {

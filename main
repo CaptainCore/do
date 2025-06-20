@@ -317,6 +317,7 @@ function show_command_help() {
             echo "  run             Executes any scheduled commands that are due."
             echo "  add \"<cmd>\" \"<time>\" \"<freq>\""
             echo "                  Adds a new command to the schedule."
+            echo "  delete <id>     Deletes a command from the schedule."
             echo
             echo "Arguments for 'add':"
             echo "  <cmd>     (Required) The _do command to run, in quotes (e.g., \"update all\")."
@@ -656,6 +657,9 @@ function main() {
                     ;;
                 add)
                     cron_add "${positional_args[2]}" "${positional_args[3]}" "${positional_args[4]}"
+                    ;;
+                delete)
+                    cron_delete "${positional_args[2]}"
                     ;;
                 *)
                     show_command_help "cron"
