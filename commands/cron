@@ -21,7 +21,6 @@ if (empty($argv) || !isset($argv[1])) {
 }
 
 $action = $argv[1] ?? null;
-
 // The main function for this script is to get the option, unserialize it,
 // perform an action, then serialize and save the result.
 function get_events() {
@@ -48,13 +47,13 @@ if ($action === 'list_all') {
     usort($events, function($a, $b) {
         return ($a['next_run'] ?? 0) <=> ($b['next_run'] ?? 0);
     });
-
     foreach ($events as $event) {
         $next_run_formatted = isset($event['next_run']) ? date('Y-m-d H:i:s T', $event['next_run']) : 'N/A';
         // Output in CSV format for gum table
         echo implode(',', [
             $event['id'] ?? 'N/A',
             '"' . ($event['command'] ?? 'N/A') . '"', // Quote command in case it has spaces
+            '"' . ($event['path'] ?? 'N/A') . '"', // Quote path
             $next_run_formatted,
             $event['frequency'] ?? 'N/A'
         ]) . "\n";
@@ -73,45 +72,55 @@ elseif ($action === 'list_due') {
 }
 
 elseif ($action === 'add') {
+    $path = ABSPATH; // Use the WordPress ABSPATH constant instead of shell_exec
+    if (empty($path) || !is_dir($path)) {
+        error_log('Error: Could not determine a valid WordPress path.');
+        return;
+    }
     $id = uniqid('event_');
-    $command = $argv[2] ?? null;
-    $next_run_str = $argv[3] ?? null;
-    $frequency = $argv[4] ?? null;
+    $command = $argv[2] ?? null; 
+    $next_run_str = $argv[3] ?? null; 
+    $frequency = $argv[4] ?? null; 
 
     if (!$command || !$next_run_str || !$frequency) {
-        error_log('Error: Missing arguments for add action.');
+        error_log('Error: Missing arguments for add action.'); 
         return;
     }
 
     // --- Frequency Translation ---
     // Make frequency more robust by translating common terms.
-    $freq_lower = strtolower($frequency);
+    $freq_lower = strtolower($frequency); 
     if ($freq_lower === 'weekly') {
-        $frequency = '1 week';
+        $frequency = '1 week'; 
     } elseif ($freq_lower === 'daily') {
-        $frequency = '1 day';
+        $frequency = '1 day'; 
     } elseif ($freq_lower === 'monthly') {
-        $frequency = '1 month';
+        $frequency = '1 month'; 
     } elseif ($freq_lower === 'hourly') {
-        $frequency = '1 hour';
+        $frequency = '1 hour'; 
     }
     // --- End Translation ---
 
     try {
         // Use PHP's robust date/time parsing
-        $next_run_dt = new DateTime($next_run_str, new DateTimeZone('UTC'));
-        $next_run_timestamp = $next_run_dt->getTimestamp();
+        $next_run_dt = new DateTime($next_run_str, new DateTimeZone('UTC')); 
+        $next_run_timestamp = $next_run_dt->getTimestamp(); 
     } catch (Exception $e) {
-        error_log('Error: Invalid date/time string for next_run: ' . $e->getMessage());
+        error_log('Error: Invalid date/time string for next_run: ' . $e->getMessage()); 
         return;
     }
     
-    $events = get_events();
-    $events[] = [
+    $events = get_events(); 
+    $events[] = [ 
         'id'        => $id,
         'command'   => $command,
+        'path'      => $path,
         'next_run'  => $next_run_timestamp,
         'frequency' => $frequency,
+    ]; 
+    save_events($events); 
+    echo "✅ Event '$id' added. Path: $path. Command: '_do $command'. Next run: " . date('Y-m-d H:i:s T', $next_run_timestamp) . "\n"; 
+}
 
 elseif ($action === 'delete') {
     $id_to_delete = $argv[2] ?? null;
@@ -141,34 +150,38 @@ elseif ($action === 'delete') {
 }
 
 elseif ($action === 'update_next_run') {
-    $id = $argv[2] ?? null;
-
+    $id = $argv[2] ?? null; 
     if (!$id) {
-        error_log('Error: No ID provided to update_next_run.');
-        return;
+        error_log('Error: No ID provided to update_next_run.'); 
+        return; 
     }
 
-    $events = get_events();
+    $events = get_events(); 
     $found = false;
     foreach ($events as &$event) {
-        if ($event['id'] === $id) {
+        if (isset($event['id']) && $event['id'] === $id) {
             try {
-                // Calculate next run based on current time and frequency
-                $now = new DateTime('now', new DateTimeZone('UTC'));
-                // The frequency should already be in a valid format (e.g., "1 week") from the 'add' action
-                $next_run_dt = $now->modify('+ ' . $event['frequency']);
-                $event['next_run'] = $next_run_dt->getTimestamp();
+                // Calculate next run based on the event's last scheduled run and frequency
+                $last_run_ts = $event['next_run'] ?? time();
+                $next_run_dt = new DateTime("@{$last_run_ts}", new DateTimeZone('UTC'));
+                
+                // In case the event is very overdue, keep adding the frequency until it's in the future.
+                do {
+                    $next_run_dt->modify('+ ' . $event['frequency']);
+                } while ($next_run_dt->getTimestamp() <= time());
+
+                $event['next_run'] = $next_run_dt->getTimestamp(); 
                 $found = true;
                 break;
             } catch (Exception $e) {
-                 error_log('Error: Invalid frequency string "' . $event['frequency'] . '": ' . $e->getMessage());
+                 error_log('Error: Invalid frequency string "' . ($event['frequency'] ?? '') . '": ' . $e->getMessage()); 
                  return;
             }
         }
     }
 
     if ($found) {
-        save_events($events);
+        save_events($events); 
     }
 }
 PHP
@@ -176,30 +189,29 @@ PHP
 }
 
 # ----------------------------------------------------
-#  Enables the cron runner in the system's crontab.
+#  Enables the global cron runner in the system's crontab.
 # ----------------------------------------------------
 function cron_enable() {
-    echo "Attempting to enable cron..."
+    echo "Attempting to enable global cron runner..."
 
-    # Get the absolute path to the _do script itself.
-    # $0 is the path to the script being run.
     local script_path
     script_path=$(realpath "$0")
     
-    local cron_command="bash $script_path cron run"
+    local cron_command="bash \"$script_path\" cron run"
     local cron_job="*/10 * * * * $cron_command"
 
-    # Check if the job already exists
+    # Check if the exact global command already exists
     if crontab -l 2>/dev/null | grep -Fq "$cron_command"; then
-        echo "✅ Cron job already enabled. Nothing to do."
+        echo "✅ Global cron job already enabled. Nothing to do." 
     else
-        echo "Adding new cron job to run every 10 minutes..."
+        echo "Adding new global cron job to run every 10 minutes..."
         # Add the new job to the existing crontab
-        (crontab -l 2>/dev/null; echo "$cron_job") | crontab -
-        if [ $? -eq 0 ]; then
-            echo "✅ Cron job successfully enabled."
+        (crontab -l 2>/dev/null; echo "$cron_job") | crontab - 
+        if [ $? -eq 0 ]; 
+        then
+            echo "✅ Global cron job successfully enabled." 
         else
-            echo "❌ Error: Could not modify crontab. Please check your permissions."
+            echo "❌ Error: Could not modify crontab. Please check your permissions." 
             return 1
         fi
     fi
@@ -211,29 +223,35 @@ function cron_enable() {
 #  Runs the cron process, executing any due events.
 # ----------------------------------------------------
 function cron_run() {
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
-    if ! wp core is-installed --quiet; then return 1; fi # Silently exit if not in a WP install
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi 
+    if ! wp core is-installed --quiet; then return 1; fi 
 
-    local php_script; php_script=$(_get_cron_manager_php_script)
+    local php_script;
+    php_script=$(_get_cron_manager_php_script) 
     
     # Capture stderr to see potential errors
-    local due_events_json; due_events_json=$(echo "$php_script" | wp eval-file - 'list_due' 2>&1)
-    if [ $? -ne 0 ]; then
-        # Silently log the error, as this runs frequently. Don't want to spam logs.
+    local due_events_json;
+    due_events_json=$(echo "$php_script" | wp eval-file - 'list_due' 2>&1) 
+    if [ $? -ne 0 ]; 
+    then
+        # Silently log the error, as this runs frequently.
+        # Don't want to spam logs.
         echo "Cron run failed: $due_events_json" >> /tmp/_do_cron.log
         return 1
     fi
 
-    if [ -z "$due_events_json" ]; then
+    if [ -z "$due_events_json" ] || [[ "$due_events_json" == "[]" ]];
+    then
         # No output or error, just exit
         return 0
     fi
 
-    # Use PHP to safely parse the JSON array
+    # Use PHP to safely parse the JSON array.
+    # The <?php tag is removed as it's not needed for `php -r`.
     local php_parser='
-<?php
 $json = file_get_contents("php://stdin");
 $events = json_decode($json, true);
+
 if (is_array($events)) {
     foreach($events as $event) {
         // Output format: id|command
@@ -241,30 +259,33 @@ if (is_array($events)) {
     }
 }
 '
-    local due_events_list; due_events_list=$(echo "$due_events_json" | php -r "$php_parser")
+    local due_events_list;
+    due_events_list=$(echo "$due_events_json" | php -r "$php_parser") 
 
-    if [ -z "$due_events_list" ]; then
+    if [ -z "$due_events_list" ]; 
+    then
         return 0 # No due events
     fi
 
     echo "Found due events, processing..."
-    while IFS='|' read -r id command; do
-        if [ -z "$id" ] || [ -z "$command" ]; then
+    while IFS='|' read -r id command; do 
+        if [ -z "$id" ] || [ -z "$command" ]; then 
             continue
         fi
 
-        echo "Running event '$id': _do $command"
+        echo "-> Running event '$id': _do $command"
         
         local script_path
-        script_path=$(realpath "$0")
+        script_path=$(realpath "$0") 
 
-        # Run the command in the background
-        (bash "$script_path" $command &)
+        # Run the command in the foreground
+        bash "$script_path" $command
         
+        echo "-> Updating next run time for event '$id'"
         # Update the next run time for this event
-        echo "$php_script" | wp eval-file - 'update_next_run' "$id"
+        echo "$php_script" | wp eval-file - 'update_next_run' "$id" 
     done <<< "$due_events_list"
-    echo "Cron run complete."
+    echo "Cron run complete." 
 }
 
 # ----------------------------------------------------
@@ -275,27 +296,31 @@ function cron_add() {
     local next_run="$2"
     local frequency="$3"
 
-    if [ -z "$command" ] || [ -z "$next_run" ] || [ -z "$frequency" ]; then
-        echo "❌ Error: Missing arguments." >&2
+    if [ -z "$command" ] || [ -z "$next_run" ] || [ -z "$frequency" ]; then 
+        echo "❌ Error: Missing arguments."
+ >&2
         show_command_help "cron"
         return 1
     fi
     
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
-    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; fi
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi 
+    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; 
+ fi
     
     echo "Adding new cron event..."
-    local php_script; php_script=$(_get_cron_manager_php_script)
+    local php_script;
+    php_script=$(_get_cron_manager_php_script) 
     
     # Capture both stdout and stderr to a variable
-    local output; output=$(echo "$php_script" | wp eval-file - "add" "$command" "$next_run" "$frequency" 2>&1)
+    local output;
+    output=$(echo "$php_script" | wp eval-file - "add" "$command" "$next_run" "$frequency" 2>&1) 
     
     # Check the exit code of the wp-cli command
-    if [ $? -ne 0 ]; then
-        echo "❌ Error: The wp-cli command failed to execute."
-        echo "   Output:"
+    if [ $? -ne 0 ]; then 
+        echo "❌ Error: The wp-cli command failed to execute." 
+        echo "   Output:" 
         # Indent the output for readability
-        echo "$output" | sed 's/^/   /'
+        echo "$output" | sed 's/^/   /' 
     else
         # Print the success message from the PHP script
         echo "$output"
@@ -303,34 +328,67 @@ function cron_add() {
 }
 
 # ----------------------------------------------------
-#  Lists all scheduled cron events in a table.
+#  Deletes a scheduled cron event by its ID.
 # ----------------------------------------------------
-function cron_list() {
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
-    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; fi
-    if ! setup_gum; then return 1; fi
+function cron_delete() {
+    local event_id="$1"
 
-    echo "🔎 Fetching scheduled events..."
-    
-    local php_script; php_script=$(_get_cron_manager_php_script)
-    
-    # Capture stdout and stderr
-    local events_csv; events_csv=$(echo "$php_script" | wp eval-file - 'list_all' 2>&1)
-
-    # Check exit code
-    if [ $? -ne 0 ]; then
-        echo "❌ Error: The wp-cli command failed while listing events."
-        echo "   Output:"
-        echo "$events_csv" | sed 's/^/   /'
+    if [ -z "$event_id" ]; then
+        echo "❌ Error: No event ID provided." >&2
+        show_command_help "cron"
         return 1
     fi
 
-    if [ -z "$events_csv" ]; then
-        echo "ℹ️ No scheduled cron events found."
-        return 0
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi 
+    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; fi 
+
+    echo "Attempting to delete event '$event_id'..."
+    local php_script
+    php_script=$(_get_cron_manager_php_script)
+
+    # Capture and display output from the PHP script
+    local output
+    output=$(echo "$php_script" | wp eval-file - "delete" "$event_id" 2>&1)
+
+    # The PHP script now prints success or error, so just display it.
+    echo "$output"
+}
+
+# ----------------------------------------------------
+#  Lists all scheduled cron events in a table.
+# ----------------------------------------------------
+function cron_list() {
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." 
+ >&2; return 1; fi
+    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; 
+ fi
+    if ! setup_gum; then return 1; 
+ fi
+
+    echo "🔎 Fetching scheduled events..."
+    
+    local php_script;
+    php_script=$(_get_cron_manager_php_script) 
+    
+    # Capture stdout and stderr
+    local events_csv;
+    events_csv=$(echo "$php_script" | wp eval-file - 'list_all' 2>&1)
+
+    # Check exit code
+    if [ $? -ne 0 ]; then 
+        echo "❌ Error: The wp-cli command failed while listing events."
+        echo "   Output:" 
+        echo "$events_csv" | sed 's/^/   /' 
+        return 1
     fi
 
-    local table_header="ID,Command,Next Run,Frequency"
+    if [ -z "$events_csv" ]; 
+    then
+        echo "ℹ️ No scheduled cron events found." 
+        return 0 
+    fi
+
+    local table_header="ID,Command,Path,Next Run,Frequency"
     
     # Prepend the header and pipe to gum table for a formatted view
     (echo "$table_header"; echo "$events_csv") | "$GUM_CMD" table --separator ","
