@@ -696,13 +696,16 @@ PHP
         local icon
         if [[ "$has_changed" == "true" ]];
         then
-            icon="ℹ️ "
+            icon="+"
         else
-            icon=" "
+            icon=$(printf '\xE2\xA0\x80\xE2\xA0\x80')
         fi
 
+        # Use "%-2s" to create a 2-character wide column for the icon.
+        # This ensures consistent padding for both the "+" and " " cases.
+        # Note the space between "%-2s" and "%-8s" is preserved.
         local display_line
-        display_line=$(printf "%-2s %-8s %-*.*s %-*.*s %s" "$icon" "$item_type" "$slug_width" "$slug_width" "$slug" "$title_width" "$title_width" "$title" "$details")
+        display_line=$(printf "%-2s%-8s %-*.*s %-*.*s %s" "$icon" "$item_type" "$slug_width" "$slug_width" "$slug" "$title_width" "$title_width" "$title" "$details")
 
         display_items+=("$display_line")
         data_items+=("$item_type|$slug")
