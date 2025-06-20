@@ -312,12 +312,11 @@ function show_command_help() {
             echo "Usage: _do cron <subcommand> [arguments]"
             echo
             echo "Subcommands:"
-            echo "  enable          Adds a job to the system crontab to run '_do cron run' every 10 minutes."
-            echo "  list            Lists all scheduled commands."
-            echo "  run             Executes any scheduled commands that are due."
-            echo "  add \"<cmd>\" \"<time>\" \"<freq>\""
-            echo "                  Adds a new command to the schedule."
-            echo "  delete <id>     Deletes a command from the schedule."
+            echo "  enable                         Adds a job to the system crontab to run '_do cron run' every 10 minutes."
+            echo "  list                           Lists all scheduled commands."
+            echo "  run                            Executes any scheduled commands that are due."
+            echo "  add \"<cmd>\" \"<time>\" \"<freq>\"  Adds a new command to the schedule."
+            echo "  delete <id>                    Deletes a command from the schedule."
             echo
             echo "Arguments for 'add':"
             echo "  <cmd>     (Required) The _do command to run, in quotes (e.g., \"update all\")."
