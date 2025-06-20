@@ -136,10 +136,10 @@ function checkpoint_create() {
     mkdir -p "$CHECKPOINT_REPO_DIR/themes" "$CHECKPOINT_REPO_DIR/plugins" "$CHECKPOINT_REPO_DIR/mu-plugins"
     
     # Use rsync to copy directories. The trailing slashes are important.
-    rsync -a --delete --exclude='*.zip' --exclude='logs/' "$wp_content_dir/themes/" "$CHECKPOINT_REPO_DIR/themes/"
-    rsync -a --delete --exclude='*.zip' --exclude='logs/' "$wp_content_dir/plugins/" "$CHECKPOINT_REPO_DIR/plugins/"
+    rsync -a --delete --exclude='*.zip' --exclude='logs/' --exclude='.git/' "$wp_content_dir/themes/" "$CHECKPOINT_REPO_DIR/themes/"
+    rsync -a --delete --exclude='*.zip' --exclude='logs/' --exclude='.git/' "$wp_content_dir/plugins/" "$CHECKPOINT_REPO_DIR/plugins/"
     if [ -d "$wp_content_dir/mu-plugins" ]; then
-      rsync -a --delete --exclude='*.zip' --exclude='logs/' "$wp_content_dir/mu-plugins/" "$CHECKPOINT_REPO_DIR/mu-plugins/"
+      rsync -a --delete --exclude='*.zip' --exclude='logs/' --exclude='.git/' "$wp_content_dir/mu-plugins/" "$CHECKPOINT_REPO_DIR/mu-plugins/"
     fi
 
     local manifest_file="$CHECKPOINT_REPO_DIR/manifest.json"
