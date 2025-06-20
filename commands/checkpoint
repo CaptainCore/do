@@ -756,7 +756,15 @@ PHP
         # --- 5. Execute Action ---
         case "$action" in
             "Show File Changes")
-                local item_path_in_repo="${item_type}s/${item_name}"
+                local item_path_in_repo
+                case "$item_type" in
+                    "Theme")
+                        item_path_in_repo="themes/${item_name}"
+                        ;;
+                    "Plugin")
+                        item_path_in_repo="plugins/${item_name}"
+                        ;;
+                esac
                 
                 # Get the list of files that have changed for the selected item.
                 local changed_files
