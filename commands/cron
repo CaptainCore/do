@@ -260,69 +260,75 @@ function cron_enable() {
 #  Runs the cron process, executing any due events.
 # ----------------------------------------------------
 function cron_run() {
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi 
-    if ! wp core is-installed --quiet; then return 1; fi 
+    # If a path is provided, change to that directory first.
+    if [[ -n "$path_flag" ]]; then
+        if [ -d "$path_flag" ]; then
+            cd "$path_flag" || { echo "[$(date)] Cron Error: Could not change directory to '$path_flag'." >> /tmp/_do_cron.log; return 1; }
+        else
+            echo "[$(date)] Cron Error: Provided path '$path_flag' does not exist." >> /tmp/_do_cron.log;
+            return 1
+        fi
+    fi
+
+    # Call the setup function to ensure the wp command path is known.
+    if ! setup_wp_cli; then
+        echo "[$(date)] Cron Error: WP-CLI setup failed." >> /tmp/_do_cron.log
+        return 1
+    fi
+
+    # Check if this is a WordPress installation using the full command path.
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then
+        return 1
+    fi
 
     local php_script;
-    php_script=$(_get_cron_manager_php_script) 
-    
-    # Capture stderr to see potential errors
+    php_script=$(_get_cron_manager_php_script)
+
     local due_events_json;
-    due_events_json=$(echo "$php_script" | wp eval-file - 'list_due' 2>&1) 
-    if [ $? -ne 0 ]; 
+    # Use the full command path for all wp-cli calls.
+    due_events_json=$(echo "$php_script" | "$WP_CLI_CMD" eval-file - 'list_due' 2>&1)
+    if [ $? -ne 0 ];
     then
-        # Silently log the error, as this runs frequently.
-        # Don't want to spam logs.
-        echo "Cron run failed: $due_events_json" >> /tmp/_do_cron.log
+        echo "[$(date)] Cron run failed: $due_events_json" >> /tmp/_do_cron.log
         return 1
     fi
 
     if [ -z "$due_events_json" ] || [[ "$due_events_json" == "[]" ]];
     then
-        # No output or error, just exit
         return 0
     fi
 
-    # Use PHP to safely parse the JSON array.
-    # The <?php tag is removed as it's not needed for `php -r`.
     local php_parser='
 $json = file_get_contents("php://stdin");
 $events = json_decode($json, true);
-
 if (is_array($events)) {
     foreach($events as $event) {
-        // Output format: id|command
         echo $event["id"] . "|" . $event["command"] . "\n";
     }
 }
 '
     local due_events_list;
-    due_events_list=$(echo "$due_events_json" | php -r "$php_parser") 
+    due_events_list=$(echo "$due_events_json" | php -r "$php_parser")
 
-    if [ -z "$due_events_list" ]; 
+    if [ -z "$due_events_list" ];
     then
-        return 0 # No due events
+        return 0
     fi
 
     echo "Found due events, processing..."
-    while IFS='|' read -r id command; do 
-        if [ -z "$id" ] || [ -z "$command" ]; then 
+    while IFS='|' read -r id command; do
+        if [ -z "$id" ] || [ -z "$command" ]; then
             continue
         fi
-
         echo "-> Running event '$id': _do $command"
-        
         local script_path
-        script_path=$(realpath "$0") 
-
-        # Run the command in the foreground
+        script_path=$(realpath "$0")
         bash "$script_path" $command
-        
         echo "-> Updating next run time for event '$id'"
-        # Update the next run time for this event
-        echo "$php_script" | wp eval-file - 'update_next_run' "$id" 
+        # Use the full command path here as well.
+        echo "$php_script" | "$WP_CLI_CMD" eval-file - 'update_next_run' "$id"
     done <<< "$due_events_list"
-    echo "Cron run complete." 
+    echo "Cron run complete."
 }
 
 # ----------------------------------------------------
