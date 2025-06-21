@@ -525,6 +525,7 @@ function main() {
     local now_flag=""
     local admin_user_flag=""
     local admin_email_flag=""
+    local path_flag=""
     local exclude_patterns=()
     local positional_args=()
     
@@ -566,6 +567,10 @@ function main() {
           admin_email_flag="${1#*=}"
           shift
           ;;
+        --path=*)
+          path_flag="${1#*=}"
+          shift
+          ;;
         -x) # Exclude flag
           if [[ -n "$2" ]]; then
             exclude_patterns+=("$2")
@@ -588,6 +593,18 @@ function main() {
           ;;
       esac
     done
+
+    # --- Global Path Handling ---
+    # If a path is provided, change to that directory first.
+    # This allows commands to be run from anywhere for a specific site.
+    if [[ -n "$path_flag" ]]; then
+        if [ -d "$path_flag" ]; then
+            cd "$path_flag" || { echo "❌ Error: Could not change directory to '$path_flag'." >&2; exit 1; }
+        else
+            echo "❌ Error: Provided path '$path_flag' does not exist." >&2
+            exit 1
+        fi
+    fi
 
     #  The first positional argument is the main command.
     local command="${positional_args[0]}"
