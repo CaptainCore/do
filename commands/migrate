@@ -7,17 +7,17 @@
 function migrate_site() {
     local backup_url="$1"
     local update_urls_flag="$2"
-    
+
     echo "🚀 Starting Site Migration 🚀"
 
     # --- Pre-flight Checks ---
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
     if ! command -v wget &>/dev/null; then echo "❌ Error: wget not found." >&2; return 1; fi
     if ! command -v unzip &>/dev/null; then echo "❌ Error: unzip not found." >&2; return 1; fi
     if ! command -v tar &>/dev/null; then echo "❌ Error: tar not found." >&2; return 1; fi
 
     local home_directory; home_directory=$(pwd)
-    local wp_home; wp_home=$( wp option get home --skip-themes --skip-plugins )
+    local wp_home; wp_home=$( "$WP_CLI_CMD" option get home --skip-themes --skip-plugins )
     if [[ "$wp_home" != "http"* ]]; then
         echo "❌ Error: WordPress not found in current directory. Migration cancelled." >&2
         return 1
@@ -161,17 +161,17 @@ function migrate_site() {
         echo "⚠️ Warning: No .sql file found in backup. Skipping database import.";
     else
         echo "Importing database from $database..."
-        local search_privacy; search_privacy=$( wp option get blog_public --skip-plugins --skip-themes )
-        wp db reset --yes --skip-plugins --skip-themes
-        wp db import "$database" --skip-plugins --skip-themes
-        wp cache flush --skip-plugins --skip-themes
-        wp option update blog_public "$search_privacy" --skip-plugins --skip-themes
+        local search_privacy; search_privacy=$( "$WP_CLI_CMD" option get blog_public --skip-plugins --skip-themes )
+        "$WP_CLI_CMD" db reset --yes --skip-plugins --skip-themes
+        "$WP_CLI_CMD" db import "$database" --skip-plugins --skip-themes
+        "$WP_CLI_CMD" cache flush --skip-plugins --skip-themes
+        "$WP_CLI_CMD" option update blog_public "$search_privacy" --skip-plugins --skip-themes
 
         #  URL updates
-        local wp_home_imported; wp_home_imported=$( wp option get home --skip-plugins --skip-themes )
+        local wp_home_imported; wp_home_imported=$( "$WP_CLI_CMD" option get home --skip-plugins --skip-themes )
         if [[ "$update_urls_flag" == "true" && "$wp_home_imported" != "$wp_home" ]]; then
             echo "Updating URLs from $wp_home_imported to $wp_home..."
-            wp search-replace "$wp_home_imported" "$wp_home" --all-tables --report-changed-only --skip-plugins --skip-themes
+            "$WP_CLI_CMD" search-replace "$wp_home_imported" "$wp_home" --all-tables --report-changed-only --skip-plugins --skip-themes
         fi
     fi
 
@@ -179,22 +179,22 @@ function migrate_site() {
     echo "Performing cleanup and final optimizations..."
     local plugins_to_remove=( backupbuddy wordfence w3-total-cache wp-super-cache ewww-image-optimizer )
     for plugin in "${plugins_to_remove[@]}"; do
-        if wp plugin is-installed "$plugin" --skip-plugins --skip-themes &>/dev/null; then
+        if "$WP_CLI_CMD" plugin is-installed "$plugin" --skip-plugins --skip-themes &>/dev/null; then
             echo "Removing plugin: $plugin"
-            wp plugin delete "$plugin" --skip-plugins --skip-themes
+            "$WP_CLI_CMD" plugin delete "$plugin" --skip-plugins --skip-themes
         fi
     done
-    
+
     #  Convert tables to InnoDB
-    local alter_queries; alter_queries=$(wp db query "SELECT CONCAT('ALTER TABLE ', TABLE_SCHEMA,'.', TABLE_NAME, ' ENGINE=InnoDB;') FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA=DATABASE()" --skip-column-names --skip-plugins --skip-themes)
+    local alter_queries; alter_queries=$("$WP_CLI_CMD" db query "SELECT CONCAT('ALTER TABLE ', TABLE_SCHEMA,'.', TABLE_NAME, ' ENGINE=InnoDB;') FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA=DATABASE()" --skip-column-names --skip-plugins --skip-themes)
     if [[ -n "$alter_queries" ]]; then
         echo "Converting MyISAM tables to InnoDB..."
-        echo "$alter_queries" | wp db query --skip-plugins --skip-themes
+        echo "$alter_queries" | "$WP_CLI_CMD" db query --skip-plugins --skip-themes
     fi
 
-    wp rewrite flush --skip-plugins --skip-themes
-    if wp plugin is-active woocommerce --skip-plugins --skip-themes &>/dev/null; then
-        wp wc tool run regenerate_product_attributes_lookup_table --user=1 --skip-plugins --skip-themes
+    "$WP_CLI_CMD" rewrite flush --skip-plugins --skip-themes
+    if "$WP_CLI_CMD" plugin is-active woocommerce --skip-plugins --skip-themes &>/dev/null; then
+        "$WP_CLI_CMD" wc tool run regenerate_product_attributes_lookup_table --user=1 --skip-plugins --skip-themes
     fi
     
     find . -type d -exec chmod 755 {} \;

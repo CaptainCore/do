@@ -21,7 +21,7 @@ function suspend_deactivate() {
 
     #  Clear Kinsta cache if environment is detected
     if [ -f "/etc/update-motd.d/00-kinsta-welcome" ]; then
-        if command -v wp &> /dev/null && wp kinsta cache purge --all --skip-themes &> /dev/null; then
+        if setup_wp_cli && "$WP_CLI_CMD" kinsta cache purge --all --skip-themes &> /dev/null; then
             echo "Kinsta cache purged."
         else
             echo "Warning: Could not purge Kinsta cache. Is the 'wp kinsta' command available?" >&2
@@ -135,7 +135,7 @@ EOF
 
     #  Clear Kinsta cache if environment is detected
     if [ -f "/etc/update-motd.d/00-kinsta-welcome" ]; then
-        if command -v wp &> /dev/null && wp kinsta cache purge --all --skip-themes &> /dev/null; then
+        if setup_wp_cli && "$WP_CLI_CMD" kinsta cache purge --all --skip-themes &> /dev/null; then
             echo "Kinsta cache purged."
         else
             echo "Warning: Could not purge Kinsta cache. Is the 'wp kinsta' command available?" >&2

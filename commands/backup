@@ -6,27 +6,29 @@ function full_backup() {
     if [ -z "$target_folder" ]; then echo "Error: Please provide a folder path." >&2; echo "Usage: _do backup <folder>" >&2; return 1; fi
     if ! command -v realpath &> /dev/null; then echo "Error: 'realpath' command not found. Please install it." >&2; return 1; fi
     if [ ! -d "$target_folder" ]; then echo "Error: Folder '$target_folder' not found." >&2; return 1; fi
-    
+
     #  Resolve the absolute path to handle cases like "."
     local full_target_path; full_target_path=$(realpath "$target_folder")
     local parent_dir; parent_dir=$(dirname "$full_target_path")
     local site_dir_name; site_dir_name=$(basename "$full_target_path")
-    
-    local today; today=$(date +"%Y-%m-%d"); local random; random=$(head /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 7); local backup_filename="${today}_${random}.zip"; local original_dir; original_dir=$(pwd)
-    
+
+    local today; today=$(date +"%Y-%m-%d"); local random; random=$(head /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 7); local backup_filename="${today}_${random}.zip"; local original_dir;
+    original_dir=$(pwd)
+
     #  Change to the parent directory for consistent relative paths in the zip
     cd "$parent_dir" || return 1
-    
-    if ! command -v wp &> /dev/null; then echo "Error: wp-cli is not installed." >&2; cd "$original_dir"; return 1; fi
-    local home_url; home_url=$(wp option get home --path="$site_dir_name" --skip-plugins --skip-themes); local name; name=$(wp option get blogname --path="$site_dir_name" --skip-plugins --skip-themes); local database_file="db_export.sql"
-    
+
+    if ! setup_wp_cli; then echo "Error: wp-cli is not installed." >&2; cd "$original_dir"; return 1; fi
+    local home_url; home_url=$("$WP_CLI_CMD" option get home --path="$site_dir_name" --skip-plugins --skip-themes); local name; name=$("$WP_CLI_CMD" option get blogname --path="$site_dir_name" --skip-plugins --skip-themes);
+    local database_file="db_export.sql"
+
     echo "Exporting database for '$name'...";
-    if ! wp db export "$site_dir_name/$database_file" --path="$site_dir_name" --add-drop-table --default-character-set=utf8mb4; then
+    if ! "$WP_CLI_CMD" db export "$site_dir_name/$database_file" --path="$site_dir_name" --add-drop-table --default-character-set=utf8mb4; then
         echo "Error: Database export failed." >&2
         cd "$original_dir"
         return 1
     fi
-    
+
     echo "Creating zip archive...";
     #  Create the zip in the parent directory, zipping the site directory
     if ! zip -r "$backup_filename" "$site_dir_name" -x "$site_dir_name/wp-content/updraft/*" > /dev/null; then
@@ -35,21 +37,21 @@ function full_backup() {
         cd "$original_dir"
         return 1
     fi
-    
+
     #  Add wp-config.php if it exists in the site directory
     if [ -f "$site_dir_name/wp-config.php" ]; then
         zip "$backup_filename" "$site_dir_name/wp-config.php" > /dev/null
     fi
-    
+
     #  Cleanup and Final Steps
     local size; size=$(ls -lh "$backup_filename" | awk '{print $5}')
     rm -f "$site_dir_name/$database_file"
     mv "$backup_filename" "$site_dir_name/"
-    
+
     local final_backup_location="$site_dir_name/$backup_filename"
-    
+
     cd "$original_dir"
-    
+
     echo "-----------------------------------------------------";
     echo "✅ Full site backup complete!";
     echo "   Name: $name";

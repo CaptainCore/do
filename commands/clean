@@ -3,19 +3,18 @@
 # ----------------------------------------------------
 function clean_themes() {
     # --- Pre-flight checks ---
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
-    if ! wp core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
 
     echo "🔎 Finding the latest default WordPress theme to preserve..."
-    latest_default_theme=$(wp theme search twenty --field=slug --per-page=1 --quiet --skip-plugins --skip-themes)
+    latest_default_theme=$("$WP_CLI_CMD" theme search twenty --field=slug --per-page=1 --quiet --skip-plugins --skip-themes)
 
     if [ $? -ne 0 ] || [ -z "$latest_default_theme" ]; then
       echo "❌ Error: Could not determine the latest default theme. Aborting." >&2
       return 1
     fi
     echo "✅ The latest default theme is '$latest_default_theme'. This will be preserved."
-
-    inactive_themes=($(wp theme list --status=inactive --field=name --skip-plugins --skip-themes))
+    inactive_themes=($("$WP_CLI_CMD" theme list --status=inactive --field=name --skip-plugins --skip-themes))
     if [ ${#inactive_themes[@]} -eq 0 ]; then
       echo "👍 No inactive themes found to process. All done!"
       return 0
@@ -28,7 +27,7 @@ function clean_themes() {
         echo "⚪️ Keeping inactive default theme: $theme"
       else
         echo "❌ Deleting inactive theme: $theme"
-        wp theme delete "$theme"
+        "$WP_CLI_CMD" theme delete "$theme"
       fi
     done
 

@@ -3,13 +3,13 @@
 # ----------------------------------------------------
 function db_backup() {
     echo "Starting database-only backup..."
-    local home_directory; home_directory=$(pwd); 
+    local home_directory; home_directory=$(pwd);
     local private_directory
     if ! private_directory=$(_get_private_dir); then
         return 1
     fi
-    if ! command -v wp &> /dev/null; then echo "Error: wp-cli is not installed." >&2; return 1; fi
-    local database_name; database_name=$(wp config get DB_NAME --skip-plugins --skip-themes --quiet); local database_username; database_username=$(wp config get DB_USER --skip-plugins --skip-themes --quiet); local database_password; database_password=$(wp config get DB_PASSWORD --skip-plugins --skip-themes --quiet);
+    if ! setup_wp_cli; then echo "Error: wp-cli is not installed." >&2; return 1; fi
+    local database_name; database_name=$("$WP_CLI_CMD" config get DB_NAME --skip-plugins --skip-themes --quiet); local database_username; database_username=$("$WP_CLI_CMD" config get DB_USER --skip-plugins --skip-themes --quiet); local database_password; database_password=$("$WP_CLI_CMD" config get DB_PASSWORD --skip-plugins --skip-themes --quiet);
     local dump_command; if command -v mariadb-dump &> /dev/null; then dump_command="mariadb-dump"; elif command -v mysqldump &> /dev/null; then dump_command="mysqldump"; else echo "Error: Neither mariadb-dump nor mysqldump could be found." >&2; return 1; fi
     echo "Using ${dump_command} for the backup."
     local backup_file="${private_directory}/database-backup-$(date +"%Y-%m-%d").sql"
@@ -27,15 +27,15 @@ function db_check_autoload() {
         echo "Aborting check: gum setup failed." >&2
         return 1
     fi
-    if ! command -v wp &> /dev/null; then echo "Error: wp-cli is not installed." >&2; return 1; fi
-    if ! command wp core is-installed --quiet; then echo "Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_wp_cli; then echo "Error: wp-cli is not installed." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "Error: This does not appear to be a WordPress installation." >&2; return 1; fi
 
     echo
     echo "--- Total Autoloaded Size ---"
-    wp db query "SELECT ROUND(SUM(LENGTH(option_value))/1024/1024, 2) as 'Autoload MB', COUNT(*) as 'Count' FROM $(wp db prefix)options WHERE autoload='yes';" | "$GUM_CMD" table --print --separator $'\t'
+    "$WP_CLI_CMD" db query "SELECT ROUND(SUM(LENGTH(option_value))/1024/1024, 2) as 'Autoload MB', COUNT(*) as 'Count' FROM $($WP_CLI_CMD db prefix)options WHERE autoload='yes';" | "$GUM_CMD" table --print --separator $'\t'
     echo
     echo "--- Top 25 Autoloaded Options & Totals ---"
-    wp db query "SELECT option_name, round(length(option_value) / 1024 / 1024, 2) as 'Size (MB)' FROM $(wp db prefix)options WHERE autoload='yes' ORDER BY length(option_value) DESC LIMIT 25" | "$GUM_CMD" table --print --separator $'\t'
+    "$WP_CLI_CMD" db query "SELECT option_name, round(length(option_value) / 1024 / 1024, 2) as 'Size (MB)' FROM $($WP_CLI_CMD db prefix)options WHERE autoload='yes' ORDER BY length(option_value) DESC LIMIT 25" | "$GUM_CMD" table --print --separator $'\t'
     echo
     echo "✅ Autoload check complete."
 }
@@ -49,8 +49,8 @@ function db_optimize() {
         echo "Aborting optimization: gum setup failed." >&2
         return 1
     fi
-    if ! command -v wp &>/dev/null; then echo "Error: WP-CLI not found." >&2; return 1; fi
-    if ! wp core is-installed --quiet; then echo "Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_wp_cli; then echo "Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "Error: This does not appear to be a WordPress installation." >&2; return 1; fi
 
     echo "🚀 Starting database optimization..."
     echo ""
@@ -58,17 +58,17 @@ function db_optimize() {
     # --- Step 1: Convert MyISAM to InnoDB ---
     echo "--- Step 1: Checking for MyISAM tables to convert to InnoDB ---"
     local myisam_tables
-    myisam_tables=$(wp db query "SELECT TABLE_NAME FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names)
+    myisam_tables=$("$WP_CLI_CMD" db query "SELECT TABLE_NAME FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names)
 
     if [[ -z "$myisam_tables" ]]; then
         echo "✅ All tables are already using the InnoDB engine. No conversion needed."
     else
         echo "Found the following MyISAM tables to convert:"
         # Use gum to format the list of tables
-        wp db query "SELECT TABLE_NAME AS 'MyISAM Tables' FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" | "$GUM_CMD" table --print --separator $'\t'
+        "$WP_CLI_CMD" db query "SELECT TABLE_NAME AS 'MyISAM Tables' FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" | "$GUM_CMD" table --print --separator $'\t'
 
         echo "Converting tables to InnoDB..."
-        wp db query "SELECT CONCAT('ALTER TABLE \`', TABLE_NAME, '\` ENGINE=InnoDB;') FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names | wp db query
+        "$WP_CLI_CMD" db query "SELECT CONCAT('ALTER TABLE \`', TABLE_NAME, '\` ENGINE=InnoDB;') FROM information_schema.TABLES WHERE ENGINE = 'MyISAM' AND TABLE_SCHEMA = DATABASE()" --skip-column-names | "$WP_CLI_CMD" db query
 
         if [ $? -eq 0 ]; then
             echo "✅ Successfully converted tables to InnoDB."
@@ -82,7 +82,7 @@ function db_optimize() {
     echo ""
     echo "--- Step 2: Top 10 Tables Larger Than 1MB ---"
     # Use gum to format the table of large tables
-    wp db query "
+    "$WP_CLI_CMD" db query "
       SELECT
         TABLE_NAME,
         CASE
@@ -93,7 +93,7 @@ function db_optimize() {
         END AS Size
       FROM
         information_schema.TABLES
-      WHERE
+     WHERE
         TABLE_SCHEMA = DATABASE() AND (data_length + index_length) > 1048576
       ORDER BY
         (data_length + index_length) DESC
@@ -103,7 +103,7 @@ function db_optimize() {
     # --- Step 3: Delete Expired Transients ---
     echo ""
     echo "--- Step 3: Deleting Expired Transients ---"
-    wp transient delete --expired
+    "$WP_CLI_CMD" transient delete --expired
 
     echo ""
     echo "✅ Database optimization complete."

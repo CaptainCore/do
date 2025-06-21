@@ -2,9 +2,9 @@
 #  Identifies plugins that may be slowing down WP-CLI command execution.
 # ----------------------------------------------------
 function identify_slow_plugins() {
-    _get_wp_execution_time() { local output; output=$(command wp "$@" --debug 2>&1); echo "$output" | perl -ne '/Debug \(bootstrap\): Running command: .+\(([^s]+s)/ && print $1'; }
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI (wp command) not found." >&2; return 1; fi
-    if ! command wp core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    _get_wp_execution_time() { local output; output=$("$WP_CLI_CMD" "$@" --debug 2>&1); echo "$output" | perl -ne '/Debug \(bootstrap\): Running command: .+\(([^s]+s)/ && print $1'; }
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI (wp command) not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
 
     echo "🚀 WordPress Plugin Performance Test 🚀"
     echo "This script measures the execution time of 'wp plugin list --debug' under various conditions."
@@ -14,13 +14,14 @@ function identify_slow_plugins() {
     local time_no_theme_s; printf "  ⏳ Measuring time with NO themes loaded (--skip-themes)... "; time_no_theme_s=$(_get_wp_execution_time plugin list --skip-themes); echo "Time: $time_no_theme_s"
     local time_no_plugins_s; printf "  ⏳ Measuring time with NO plugins loaded (--skip-plugins)... "; time_no_plugins_s=$(_get_wp_execution_time plugin list --skip-plugins); echo "Time: $time_no_plugins_s"
     local base_time_s; printf "  ⏳ Measuring base time (ALL plugins & theme active)... "; base_time_s=$(_get_wp_execution_time plugin list)
-    if [[ -z "$base_time_s" ]]; then echo "❌ Error: Could not measure base execution time." >&2; return 1; fi; echo "Base time: $base_time_s"
+    if [[ -z "$base_time_s" ]]; then echo "❌ Error: Could not measure base execution time." >&2; return 1; fi;
+    echo "Base time: $base_time_s"
     echo ""
 
     local active_plugins=()
     while IFS= read -r line; do
         active_plugins+=("$line")
-    done < <(command wp plugin list --field=name --status=active)
+    done < <("$WP_CLI_CMD" plugin list --field=name --status=active)
 
     if [[ ${#active_plugins[@]} -eq 0 ]]; then echo "ℹ️ No active plugins found to test."; return 0; fi
 

@@ -6,8 +6,8 @@ function reset_site() {
     local admin_email="$2"
 
     # --- Pre-flight Checks ---
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
-    if ! wp core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
     if ! command -v wget &>/dev/null; then echo "❌ Error: wget not found." >&2; return 1; fi
     if ! command -v unzip &>/dev/null; then echo "❌ Error: unzip not found." >&2; return 1; fi
     if ! command -v curl &>/dev/null; then echo "❌ Error: curl not found." >&2; return 1; fi
@@ -18,42 +18,41 @@ function reset_site() {
     for i in {3..1}; do echo -n "Continuing in $i... "; sleep 1; done; echo
 
     # --- Gather Info Before Reset ---
-    local url; url=$( wp option get home --skip-plugins --skip-themes )
-    local title; title=$( wp option get blogname --skip-plugins --skip-themes )
+    local url; url=$( "$WP_CLI_CMD" option get home --skip-plugins --skip-themes )
+    local title; title=$( "$WP_CLI_CMD" option get blogname --skip-plugins --skip-themes )
 
     # If admin_email is not supplied, get it from the current installation
     if [ -z "$admin_email" ]; then
-        admin_email=$(wp option get admin_email --skip-plugins --skip-themes)
+        admin_email=$("$WP_CLI_CMD" option get admin_email --skip-plugins --skip-themes)
         echo "ℹ️ Admin email not provided. Using existing email: $admin_email"
     fi
 
     # --- Perform Reset ---
     echo "Step 1/9: Resetting the database..."
-    wp db reset --yes --skip-plugins --skip-themes
+    "$WP_CLI_CMD" db reset --yes --skip-plugins --skip-themes
 
     echo "Step 2/9: Downloading latest WordPress core..."
-    wp core download --force --skip-plugins --skip-themes
+    "$WP_CLI_CMD" core download --force --skip-plugins --skip-themes
 
     echo "Step 3/9: Installing WordPress core..."
-    wp core install --url="$url" --title="$title" --admin_user="$admin_user" --admin_email="$admin_email" --skip-plugins --skip-themes
+    "$WP_CLI_CMD" core install --url="$url" --title="$title" --admin_user="$admin_user" --admin_email="$admin_email" --skip-plugins --skip-themes
 
     echo "Step 4/9: Deleting all other themes..."
-    wp theme delete --all --force --skip-plugins --skip-themes
+    "$WP_CLI_CMD" theme delete --all --force --skip-plugins --skip-themes
 
     echo "Step 5/9: Deleting all plugins..."
-    wp plugin delete --all --skip-plugins --skip-themes
+    "$WP_CLI_CMD" plugin delete --all --skip-plugins --skip-themes
 
      echo "Step 6/9: Finding the latest default WordPress theme..."
-    latest_default_theme=$(wp theme search twenty --field=slug --per-page=1 --quiet --skip-plugins --skip-themes)
+    latest_default_theme=$("$WP_CLI_CMD" theme search twenty --field=slug --per-page=1 --quiet --skip-plugins --skip-themes)
 
     if [ $? -ne 0 ] || [ -z "$latest_default_theme" ]; then
-      echo "❌ Error: Could not determine the latest default theme. Aborting reset."  >&2
+      echo "❌ Error: Could not determine the latest default theme. Aborting reset." >&2
       return 1
     fi
     echo "✅ Latest default theme is '$latest_default_theme'."
-
     echo "Step 7/9: Installing and activating '$latest_default_theme'..."
-    wp theme install "$latest_default_theme" --force --activate --skip-plugins --skip-themes
+    "$WP_CLI_CMD" theme install "$latest_default_theme" --force --activate --skip-plugins --skip-themes
 
     echo "Step 8/9: Cleaning up directories (mu-plugins, uploads)..."
     rm -rf wp-content/mu-plugins/

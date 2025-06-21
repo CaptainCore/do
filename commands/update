@@ -34,6 +34,7 @@ function _ensure_update_setup() {
 # ----------------------------------------------------
 function _select_update_log() {
     _ensure_update_setup
+    if ! setup_wp_cli; then return 1; fi
 
     if [ ! -s "$UPDATE_LOGS_LIST_FILE" ]; then
         echo "ℹ️ No update logs found. Run '_do update all' to create one." >&2
@@ -65,7 +66,7 @@ foreach($list as $item) {
 }
 '
     local php_script; php_script=$(printf "$php_script_read_list" "$UPDATE_LOGS_LIST_FILE")
-    local update_entries; update_entries=$(echo "$php_script" | wp eval-file -)
+    local update_entries; update_entries=$(echo "$php_script" | "$WP_CLI_CMD" eval-file -)
 
     if [[ "$update_entries" == "EMPTY" ]]; then
         echo "ℹ️ No update logs available to select." >&2; return 1;
@@ -128,6 +129,7 @@ foreach($list as $item) {
 # ----------------------------------------------------
 function update_list_generate() {
     if ! setup_gum || ! setup_git; then return 1; fi
+    if ! setup_wp_cli; then return 1; fi
     _ensure_checkpoint_setup # This sets up repo path as well
     _ensure_update_setup
 
@@ -149,7 +151,7 @@ foreach($list as $item) {
 }
 '
     local php_script; php_script=$(printf "$php_script_read_list" "$UPDATE_LOGS_LIST_FILE")
-    local update_entries; update_entries=$(echo "$php_script" | wp eval-file -)
+    local update_entries; update_entries=$(echo "$php_script" | "$WP_CLI_CMD" eval-file -)
 
     if [ -z "$update_entries" ]; then
         echo "ℹ️ No update logs found to generate a list from."
@@ -191,7 +193,7 @@ $plugin_count = isset($data["plugins"]) && is_array($data["plugins"]) ? count($d
 echo "$theme_count Themes, $plugin_count Plugins";
 '
         local counts_script; counts_script=$(printf "$php_get_counts" "$manifest_after")
-        local counts_str; counts_str=$(echo "$counts_script" | wp eval-file -)
+        local counts_str; counts_str=$(echo "$counts_script" | "$WP_CLI_CMD" eval-file -)
         
         local diff_stats
         diff_stats=$("$GIT_CMD" -C "$CHECKPOINT_REPO_DIR" diff --shortstat "$hash_before" "$hash_after" -- 'plugins/' 'themes/' 'mu-plugins/' | sed 's/^[ \t]*//')
@@ -226,7 +228,7 @@ $data = json_decode($json_data, true);
 file_put_contents($list_file, json_encode($data, JSON_PRETTY_PRINT));
 '
     local write_script; write_script=$(printf "$php_write_script" "$UPDATE_LOGS_LIST_FILE" "$full_json")
-    if echo "$write_script" | wp eval-file -; then
+    if echo "$write_script" | "$WP_CLI_CMD" eval-file -; then
         echo "✅ Detailed update list saved to $UPDATE_LOGS_LIST_FILE"
     else
         echo "❌ Error: Failed to write detailed update list."
@@ -238,6 +240,7 @@ file_put_contents($list_file, json_encode($data, JSON_PRETTY_PRINT));
 # ----------------------------------------------------
 function update_list() {
     if ! setup_gum || ! setup_git; then return 1; fi
+    if ! setup_wp_cli; then return 1; fi
     _ensure_checkpoint_setup # Ensures repo path is set
     
     local selected_hashes
@@ -256,7 +259,6 @@ function update_list() {
 
     checkpoint_show "$selected_hash_after" "$selected_hash_before"
 }
-
 
 # ----------------------------------------------------
 #  Runs the full update process.
@@ -281,11 +283,11 @@ function run_update_all() {
 
     echo "   - Step 2/5: Running WordPress updates..."
     echo "     - Updating core..."
-    wp core update --skip-plugins --skip-themes
+    "$WP_CLI_CMD" core update --skip-plugins --skip-themes
     echo "     - Updating themes..."
-    wp theme update --all --skip-plugins --skip-themes
+    "$WP_CLI_CMD" theme update --all --skip-plugins --skip-themes
     echo "     - Updating plugins..."
-    wp plugin update --all --skip-plugins --skip-themes
+    "$WP_CLI_CMD" plugin update --all --skip-plugins --skip-themes
 
     echo "   - Step 3/5: Creating 'after' checkpoint..."
     checkpoint_create > /dev/null
@@ -330,7 +332,7 @@ echo json_encode($simple_list, JSON_PRETTY_PRINT);
     local php_list_script; php_list_script=$(printf "$php_list_template" "$UPDATE_LOGS_LIST_FILE" "$hash_before" "$hash_after" "$timestamp")
     
     local temp_list_file; temp_list_file=$(mktemp)
-    if echo "$php_list_script" | wp eval-file - > "$temp_list_file"; then
+    if echo "$php_list_script" | "$WP_CLI_CMD" eval-file - > "$temp_list_file"; then
         mv "$temp_list_file" "$UPDATE_LOGS_LIST_FILE"
     else
         echo "❌ Error: Failed to update master update list." >&2

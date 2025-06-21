@@ -200,7 +200,7 @@ PHP
 function cron_enable() {
     echo "Attempting to configure cron runner..."
 
-    if ! command -v wp &>/dev/null || ! wp core is-installed --quiet; then
+    if ! setup_wp_cli || ! "$WP_CLI_CMD" core is-installed --quiet; then
         echo "❌ Error: This command must be run from within a WordPress directory." >&2
         return 1
     fi
@@ -245,7 +245,7 @@ function cron_enable() {
 
     if [ $? -eq 0 ]; then
         local site_url
-        site_url=$(wp option get home --skip-plugins --skip-themes 2>/dev/null)
+        site_url=$("$WP_CLI_CMD" option get home --skip-plugins --skip-themes 2>/dev/null)
         echo "✅ Cron runner enabled for site: $site_url ($wp_path)"
     else
         echo "❌ Error: Could not modify crontab. Please check your permissions." >&2
@@ -339,30 +339,27 @@ function cron_add() {
     local next_run="$2"
     local frequency="$3"
 
-    if [ -z "$command" ] || [ -z "$next_run" ] || [ -z "$frequency" ]; then 
+    if [ -z "$command" ] || [ -z "$next_run" ] || [ -z "$frequency" ]; then
         echo "❌ Error: Missing arguments." >&2
         show_command_help "cron"
         return 1
     fi
-    
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
-    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; 
- fi
-    
+
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; fi
+
     echo "Adding new cron event..."
-    local php_script;
-    php_script=$(_get_cron_manager_php_script) 
-    
+    local php_script; php_script=$(_get_cron_manager_php_script)
+
     # Capture both stdout and stderr to a variable
-    local output;
-    output=$(echo "$php_script" | wp eval-file - "add" "$command" "$next_run" "$frequency" 2>&1) 
-    
+    local output; output=$(echo "$php_script" | "$WP_CLI_CMD" eval-file - "add" "$command" "$next_run" "$frequency" 2>&1)
+
     # Check the exit code of the wp-cli command
-    if [ $? -ne 0 ]; then 
-        echo "❌ Error: The wp-cli command failed to execute." 
-        echo "   Output:" 
+    if [ $? -ne 0 ]; then
+        echo "❌ Error: The wp-cli command failed to execute."
+        echo "   Output:"
         # Indent the output for readability
-        echo "$output" | sed 's/^/   /' 
+        echo "$output" | sed 's/^/   /'
     else
         # Print the success message from the PHP script
         echo "$output"
@@ -381,9 +378,8 @@ function cron_delete() {
         return 1
     fi
 
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; 
-    fi 
-    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation."  >&2; return 1; fi 
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; fi
 
     echo "Attempting to delete event '$event_id'..."
     local php_script
@@ -391,7 +387,7 @@ function cron_delete() {
 
     # Capture and display output from the PHP script
     local output
-    output=$(echo "$php_script" | wp eval-file - "delete" "$event_id" 2>&1)
+    output=$(echo "$php_script" | "$WP_CLI_CMD" eval-file - "delete" "$event_id" 2>&1)
 
     # The PHP script now prints success or error, so just display it.
     echo "$output"
@@ -401,37 +397,32 @@ function cron_delete() {
 #  Lists all scheduled cron events in a table.
 # ----------------------------------------------------
 function cron_list() {
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
-    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; 
- fi
-    if ! setup_gum; then return 1; 
- fi
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then return 1; fi
 
     echo "🔎 Fetching scheduled events..."
-    
-    local php_script;
-    php_script=$(_get_cron_manager_php_script) 
-    
+
+    local php_script; php_script=$(_get_cron_manager_php_script)
+
     # Capture stdout and stderr
-    local events_csv;
-    events_csv=$(echo "$php_script" | wp eval-file - 'list_all' 2>&1)
+    local events_csv; events_csv=$(echo "$php_script" | "$WP_CLI_CMD" eval-file - 'list_all' 2>&1)
 
     # Check exit code
-    if [ $? -ne 0 ]; then 
+    if [ $? -ne 0 ]; then
         echo "❌ Error: The wp-cli command failed while listing events."
-        echo "   Output:" 
-        echo "$events_csv" | sed 's/^/   /' 
+        echo "   Output:"
+        echo "$events_csv" | sed 's/^/   /'
         return 1
     fi
 
-    if [ -z "$events_csv" ]; 
-    then
-        echo "ℹ️ No scheduled cron events found." 
-        return 0 
+    if [ -z "$events_csv" ]; then
+        echo "ℹ️ No scheduled cron events found."
+        return 0
     fi
 
     local table_header="ID,Command,Next Run,Frequency"
-    
+
     # Prepend the header and pipe to gum table for a formatted view
     (echo "$table_header"; echo "$events_csv") | "$GUM_CMD" table --print --separator ","
 }

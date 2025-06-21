@@ -89,15 +89,14 @@ function _ensure_checkpoint_setup() {
 # ----------------------------------------------------
 function _generate_manifest() {
     local output_file="$1"
-    if [ -z "$output_file" ];
-then
-        echo "Error: No output file provided to _generate_manifest."  >&2
+    if [ -z "$output_file" ]; then
+        echo "Error: No output file provided to _generate_manifest." >&2
         return 1
     fi
 
-    local core_version; core_version=$(wp core version --skip-plugins --skip-themes) 
-    local plugins; plugins=$(wp plugin list --fields=name,title,status,version,auto_update --format=json --skip-plugins --skip-themes)
-    local themes; themes=$(wp theme list --fields=name,title,status,version,auto_update --format=json --skip-plugins --skip-themes)
+    local core_version; core_version=$("$WP_CLI_CMD" core version --skip-plugins --skip-themes)
+    local plugins; plugins=$("$WP_CLI_CMD" plugin list --fields=name,title,status,version,auto_update --format=json --skip-plugins --skip-themes)
+    local themes; themes=$("$WP_CLI_CMD" theme list --fields=name,title,status,version,auto_update --format=json --skip-plugins --skip-themes)
 
     # Manually create JSON to avoid extra dependencies
     cat <<EOF > "$output_file"
@@ -114,17 +113,16 @@ EOF
 # ----------------------------------------------------
 function checkpoint_create() {
     if ! setup_git; then return 1; fi
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
     if ! command -v rsync &>/dev/null; then echo "❌ Error: rsync command not found." >&2; return 1; fi
-
 
     _ensure_checkpoint_setup
 
     echo "🚀 Creating new checkpoint..."
-    
+
     # Get wp-content path
     local wp_content_dir
-    wp_content_dir=$(wp eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
+    wp_content_dir=$("$WP_CLI_CMD" eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
     if [ -z "$wp_content_dir" ] || [ ! -d "$wp_content_dir" ]; then
         echo "❌ Error: Could not determine wp-content directory." >&2
         return 1
@@ -134,7 +132,7 @@ function checkpoint_create() {
     # Sync files
     echo "   - Syncing themes, plugins, and mu-plugins..."
     mkdir -p "$CHECKPOINT_REPO_DIR/themes" "$CHECKPOINT_REPO_DIR/plugins" "$CHECKPOINT_REPO_DIR/mu-plugins"
-    
+
     # Use rsync to copy directories. The trailing slashes are important.
     rsync -a --delete --exclude='*.zip' --exclude='logs/' --exclude='.git/' "$wp_content_dir/themes/" "$CHECKPOINT_REPO_DIR/themes/"
     rsync -a --delete --exclude='*.zip' --exclude='logs/' --exclude='.git/' "$wp_content_dir/plugins/" "$CHECKPOINT_REPO_DIR/plugins/"
@@ -143,7 +141,7 @@ function checkpoint_create() {
     fi
 
     local manifest_file="$CHECKPOINT_REPO_DIR/manifest.json"
-    
+
     echo "   - Generating manifest..."
     if ! _generate_manifest "$manifest_file"; then
         echo "❌ Error: Failed to generate manifest file." >&2
@@ -207,7 +205,7 @@ echo json_encode($list, JSON_PRETTY_PRINT);
     local php_script; php_script=$(printf "$php_code_template" "$CHECKPOINT_LIST_FILE" "$commit_hash" "$timestamp")
     
     local temp_list_file; temp_list_file=$(mktemp)
-    if echo "$php_script" | wp eval-file - > "$temp_list_file"; then
+    if echo "$php_script" | "$WP_CLI_CMD" eval-file - > "$temp_list_file"; then
         mv "$temp_list_file" "$CHECKPOINT_LIST_FILE"
     else
         echo "❌ Error: Failed to update checkpoint list." >&2
@@ -227,6 +225,7 @@ echo json_encode($list, JSON_PRETTY_PRINT);
 # ----------------------------------------------------
 function checkpoint_list_generate() {
     if ! setup_gum || ! setup_git; then return 1; fi
+    if ! setup_wp_cli; then return 1; fi
     _ensure_checkpoint_setup
 
     # Read the potentially simple list created by `checkpoint create`
@@ -243,7 +242,7 @@ foreach($list as $item) {
 }
 '
     local php_script; php_script=$(printf "$php_script_read_list" "$CHECKPOINT_LIST_FILE")
-    local checkpoint_entries; checkpoint_entries=$(echo "$php_script" | wp eval-file -)
+    local checkpoint_entries; checkpoint_entries=$(echo "$php_script" | "$WP_CLI_CMD" eval-file -)
 
     if [ -z "$checkpoint_entries" ]; then
         echo "ℹ️  No checkpoints found to generate a list from."
@@ -272,7 +271,7 @@ $plugin_count = isset($data["plugins"]) && is_array($data["plugins"]) ? count($d
 echo "$theme_count Themes, $plugin_count Plugins";
 '
         local counts_script; counts_script=$(printf "$php_get_counts" "$manifest_current")
-        local counts_str; counts_str=$(echo "$counts_script" | wp eval-file -)
+        local counts_str; counts_str=$(echo "$counts_script" | "$WP_CLI_CMD" eval-file -)
         
         local diff_stats="Initial checkpoint"
         if [ -n "$parent_hash" ]; then
@@ -312,7 +311,7 @@ $data = json_decode($json_data, true);
 file_put_contents($list_file, json_encode($data, JSON_PRETTY_PRINT));
 '
     local write_script; write_script=$(printf "$php_write_script" "$CHECKPOINT_LIST_FILE" "$full_json")
-    if echo "$write_script" | wp eval-file -; then
+    if echo "$write_script" | "$WP_CLI_CMD" eval-file -; then
         echo "✅ Detailed checkpoint list saved to $CHECKPOINT_LIST_FILE"
     else
         echo "❌ Error: Failed to write detailed list."
@@ -324,6 +323,7 @@ file_put_contents($list_file, json_encode($data, JSON_PRETTY_PRINT));
 # ----------------------------------------------------
 function _select_checkpoint_hash() {
     _ensure_checkpoint_setup
+    if ! setup_wp_cli; then return 1; fi
 
     if [ ! -s "$CHECKPOINT_LIST_FILE" ]; then
         echo "ℹ️ No checkpoints found. Run '_do checkpoint create' to make one." >&2
@@ -355,7 +355,7 @@ foreach($list as $item) {
 }
 '
     local php_script; php_script=$(printf "$php_script_read_list" "$CHECKPOINT_LIST_FILE")
-    local checkpoint_entries; checkpoint_entries=$(echo "$php_script" | wp eval-file -)
+    local checkpoint_entries; checkpoint_entries=$(echo "$php_script" | "$WP_CLI_CMD" eval-file -)
 
     if [[ "$checkpoint_entries" == "EMPTY" ]]; then
         echo "ℹ️  No checkpoints available to select." >&2
@@ -453,6 +453,7 @@ function checkpoint_revert() {
     local target_hash="$1"
 
     if ! setup_gum || ! setup_git; then return 1; fi
+    if ! setup_wp_cli; then return 1; fi
 
     # If no hash is provided, let the user pick one from a detailed list.
     if [ -z "$target_hash" ]; then
@@ -483,7 +484,7 @@ function checkpoint_revert() {
 
     # Get wp-content path for rsync destination
     local wp_content_dir
-    wp_content_dir=$(wp eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
+    wp_content_dir=$("$WP_CLI_CMD" eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
     if [ -z "$wp_content_dir" ] || [ ! -d "$wp_content_dir" ]; then
         echo "❌ Error: Could not determine wp-content directory." >&2
         return 1
@@ -522,6 +523,7 @@ function checkpoint_show() {
     fi
 
     if ! setup_gum || ! setup_git; then return 1; fi
+    if ! setup_wp_cli; then return 1; fi
     _ensure_checkpoint_setup
 
     # If 'before' hash is not provided, find the parent of the 'after' hash.
@@ -672,7 +674,7 @@ process_item_diff('Plugin', $after_data['plugins'] ?? [], $before_data['plugins'
 PHP
 
     local php_output
-    php_output=$(echo "$php_script" | wp eval-file - 2>/dev/null)
+    php_output=$(echo "$php_script" | "$WP_CLI_CMD" eval-file - 2>/dev/null)
 
     # Unset the environment variables
     unset MANIFEST_AFTER_JSON
@@ -741,7 +743,7 @@ PHP
 
         # --- 3. Get wp-content Path ---
         local wp_content_dir
-        wp_content_dir=$(wp eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
+        wp_content_dir=$("$WP_CLI_CMD" eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
         if [ -z "$wp_content_dir" ] || [ ! -d "$wp_content_dir" ]; then
             echo "❌ Error: Could not determine wp-content directory." >&2
             return 1
@@ -824,6 +826,7 @@ PHP
 # ----------------------------------------------------
 function checkpoint_latest() {
     _ensure_checkpoint_setup
+    if ! setup_wp_cli; then return 1; fi
     if [ ! -s "$CHECKPOINT_LIST_FILE" ]; then
         echo "ℹ️ No checkpoints found."
         return
@@ -840,8 +843,8 @@ if (!empty($list) && isset($list[0]->hash)) {
 '
     local php_script; php_script=$(printf "$php_code_template" "$CHECKPOINT_LIST_FILE")
     local latest_hash
-    latest_hash=$(echo "$php_script" | wp eval-file -)
-    
+    latest_hash=$(echo "$php_script" | "$WP_CLI_CMD" eval-file -)
+
     if [ -z "$latest_hash" ]; then
         echo "ℹ️ No checkpoints found."
     else
