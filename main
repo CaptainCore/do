@@ -15,6 +15,7 @@ RCLONE_VERSION="1.69.3"
 GIT_VERSION="2.50.0"
 GUM_CMD=""
 CWEBP_CMD=""
+WP_CLI_CMD=""
 
 # --- Helper Functions ---
 
@@ -263,6 +264,37 @@ function setup_git() {
     # and error out if it's not installed. A proper sideload for git
     # is significantly more involved than for the other tools.
     echo "❌ Error: 'git' command not found. Please install Git to use checkpoint features." >&2
+    return 1
+}
+
+# ----------------------------------------------------
+#  Checks for and finds the 'wp' command. Sets WP_CLI_CMD on success.
+# ----------------------------------------------------
+function setup_wp_cli() {
+    # Return if already found
+    if [[ -n "$WP_CLI_CMD" ]]; then return 0; fi
+
+    # 1. Check if 'wp' is already in the PATH (covers interactive shells)
+    if command -v wp &> /dev/null; then
+        WP_CLI_CMD="wp"
+        return 0
+    fi
+
+    # 2. If not in PATH, check common absolute paths for cron environments
+    local common_paths=(
+        "/usr/local/bin/wp"
+        "$HOME/bin/wp"
+        "/opt/wp-cli/wp"
+    )
+    for path in "${common_paths[@]}"; do
+        if [ -x "$path" ]; then
+            WP_CLI_CMD="$path"
+            return 0
+        fi
+    done
+
+    # 3. If still not found, error out
+    echo "❌ Error: 'wp' command not found. Please ensure WP-CLI is installed and in your PATH." >&2
     return 1
 }
 
