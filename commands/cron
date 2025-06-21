@@ -53,7 +53,6 @@ if ($action === 'list_all') {
         echo implode(',', [
             $event['id'] ?? 'N/A',
             '"' . ($event['command'] ?? 'N/A') . '"', // Quote command in case it has spaces
-            '"' . ($event['path'] ?? 'N/A') . '"', // Quote path
             $next_run_formatted,
             $event['frequency'] ?? 'N/A'
         ]) . "\n";
@@ -72,15 +71,10 @@ elseif ($action === 'list_due') {
 }
 
 elseif ($action === 'add') {
-    $path = ABSPATH; // Use the WordPress ABSPATH constant instead of shell_exec
-    if (empty($path) || !is_dir($path)) {
-        error_log('Error: Could not determine a valid WordPress path.');
-        return;
-    }
     $id = uniqid('event_');
-    $command = $argv[2] ?? null; 
-    $next_run_str = $argv[3] ?? null; 
-    $frequency = $argv[4] ?? null; 
+    $command = $argv[2] ?? null;
+    $next_run_str = $argv[3] ?? null;
+    $frequency = $argv[4] ?? null;
 
     if (!$command || !$next_run_str || !$frequency) {
         error_log('Error: Missing arguments for add action.'); 
@@ -103,23 +97,22 @@ elseif ($action === 'add') {
 
     try {
         // Use PHP's robust date/time parsing
-        $next_run_dt = new DateTime($next_run_str, new DateTimeZone('UTC')); 
+        $next_run_dt = new DateTime($next_run_str, new DateTimeZone('UTC'));
         $next_run_timestamp = $next_run_dt->getTimestamp(); 
     } catch (Exception $e) {
         error_log('Error: Invalid date/time string for next_run: ' . $e->getMessage()); 
         return;
     }
     
-    $events = get_events(); 
+    $events = get_events();
     $events[] = [ 
         'id'        => $id,
         'command'   => $command,
-        'path'      => $path,
         'next_run'  => $next_run_timestamp,
         'frequency' => $frequency,
-    ]; 
+    ];
     save_events($events); 
-    echo "✅ Event '$id' added. Path: $path. Command: '_do $command'. Next run: " . date('Y-m-d H:i:s T', $next_run_timestamp) . "\n"; 
+    echo "✅ Event '$id' added. Command: '_do $command'. Next run: " . date('Y-m-d H:i:s T', $next_run_timestamp) . "\n";
 }
 
 elseif ($action === 'delete') {
@@ -132,7 +125,6 @@ elseif ($action === 'delete') {
     $events = get_events();
     $updated_events = [];
     $found = false;
-
     foreach ($events as $event) {
         if (isset($event['id']) && $event['id'] === $id_to_delete) {
             $found = true;
@@ -170,7 +162,7 @@ elseif ($action === 'update_next_run') {
                     $next_run_dt->modify('+ ' . $event['frequency']);
                 } while ($next_run_dt->getTimestamp() <= time());
 
-                $event['next_run'] = $next_run_dt->getTimestamp(); 
+                $event['next_run'] = $next_run_dt->getTimestamp();
                 $found = true;
                 break;
             } catch (Exception $e) {
@@ -189,64 +181,63 @@ PHP
 }
 
 # ----------------------------------------------------
-#  Enables the global cron runner in the system's crontab.
+#  Configures the global cron runner by installing the latest script.
 # ----------------------------------------------------
 function cron_enable() {
-    echo "Attempting to enable global cron runner..."
+    echo "Attempting to configure cron runner..."
 
-    # Check if _do is an alias and install a persistent script if needed
-    local script_path
-    # Redirect stderr to /dev/null to suppress the "not found" error from the type command
-    if [[ $(type _do 2>/dev/null) == *"alias"* ]]; then
-        echo "ℹ️ '_do' is an alias. Installing a persistent version to the private directory for cron..."
-        
-        # Use the helper to find/create the private directory
-        local private_dir
-        if ! private_dir=$(_get_private_dir); then
-            # Error message is handled by the helper function
-            return 1
-        fi
-        
-        local dest_file="$private_dir/_do"
-
-        if ! command -v curl &> /dev/null; then
-             echo "❌ Error: 'curl' is required to download the persistent script." >&2
-             return 1
-        fi
-        
-        # Download the script from the URL specified in the installation instructions
-        if ! curl -sL "https://captaincore.io/do" -o "$dest_file"; then
-            echo "❌ Error: Failed to download the _do script." >&2
-            return 1
-        fi
-        
-        chmod +x "$dest_file"
-        
-        script_path="$dest_file"
-        echo "✅ Script installed to $script_path"
-        
-    else
-        # Not an alias, so it's a physical script. Get its path.
-        script_path=$(realpath "$0")
+    if ! command -v wp &>/dev/null || ! wp core is-installed --quiet; then
+        echo "❌ Error: This command must be run from within a WordPress directory." >&2
+        return 1
     fi
-    
-    local cron_command="bash \"$script_path\" cron run"
-    local cron_job="*/10 * * * * $cron_command"
-
-    # Check if the exact global command already exists
-    if crontab -l 2>/dev/null | grep -Fq "$cron_command"; then
-        echo "✅ Global cron job already enabled. Nothing to do."
-    else
-        echo "Adding new global cron job to run every 10 minutes..."
-        # Add the new job to the existing crontab
-        (crontab -l 2>/dev/null; echo "$cron_job") | crontab -
-        if [ $? -eq 0 ]; then
-            echo "✅ Global cron job successfully enabled."
-        else
-            echo "❌ Error: Could not modify crontab. Please check your permissions."
-            return 1
-        fi
+    if ! command -v realpath &> /dev/null || ! command -v md5sum &> /dev/null; then
+        echo "❌ Error: 'realpath' and 'md5sum' commands are required." >&2
+        return 1
     fi
+
+    # Determine the absolute path of the WordPress installation
+    local wp_path
+    wp_path=$(realpath ".")
+    if [[ ! -f "$wp_path/wp-load.php" ]]; then
+        echo "❌ Error: Could not confirm WordPress root at '$wp_path'." >&2
+        return 1
+    fi
+
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then return 1; fi
+    local script_path="$private_dir/_do.sh"
+
+    echo "ℹ️  Downloading the latest version of the _do script..."
+    if ! command -v curl &> /dev/null; then
+         echo "❌ Error: 'curl' is required to download the script." >&2; return 1;
+    fi
+    if ! curl -sL "https://captaincore.io/do" -o "$script_path"; then
+        echo "❌ Error: Failed to download the _do script." >&2; return 1;
+    fi
+    chmod +x "$script_path"
+    echo "✅ Script installed/updated at: $script_path"
+
+    # Make the marker unique to the path to allow multiple cron jobs
+    local path_hash
+    path_hash=$(echo "$wp_path" | md5sum | cut -d' ' -f1)
+    local cron_marker="#_DO_CRON_RUNNER_$path_hash"
+    local cron_command="bash \"$script_path\" cron run --path=\"$wp_path\""
+    local cron_job="*/10 * * * * $cron_command $cron_marker"
+
+    # Atomically update the crontab
+    local current_crontab
+    current_crontab=$(crontab -l 2>/dev/null | grep -v "$cron_marker")
+    (echo "$current_crontab"; echo "$cron_job") | crontab -
+
+    if [ $? -eq 0 ]; then
+        local site_url
+        site_url=$(wp option get home --skip-plugins --skip-themes 2>/dev/null)
+        echo "✅ Cron runner enabled for site: $site_url ($wp_path)"
+    else
+        echo "❌ Error: Could not modify crontab. Please check your permissions." >&2
+        return 1
+    fi
+
     echo "Current crontab:"
     crontab -l
 }
@@ -329,13 +320,12 @@ function cron_add() {
     local frequency="$3"
 
     if [ -z "$command" ] || [ -z "$next_run" ] || [ -z "$frequency" ]; then 
-        echo "❌ Error: Missing arguments."
- >&2
+        echo "❌ Error: Missing arguments." >&2
         show_command_help "cron"
         return 1
     fi
     
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi 
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
     if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; 
  fi
     
@@ -371,8 +361,9 @@ function cron_delete() {
         return 1
     fi
 
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi 
-    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; fi 
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; 
+    fi 
+    if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation."  >&2; return 1; fi 
 
     echo "Attempting to delete event '$event_id'..."
     local php_script
@@ -390,8 +381,7 @@ function cron_delete() {
 #  Lists all scheduled cron events in a table.
 # ----------------------------------------------------
 function cron_list() {
-    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." 
- >&2; return 1; fi
+    if ! command -v wp &>/dev/null; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
     if ! wp core is-installed --quiet; then echo "❌ Error: Not in a WordPress installation." >&2; return 1; 
  fi
     if ! setup_gum; then return 1; 
@@ -420,8 +410,8 @@ function cron_list() {
         return 0 
     fi
 
-    local table_header="ID,Command,Path,Next Run,Frequency"
+    local table_header="ID,Command,Next Run,Frequency"
     
     # Prepend the header and pipe to gum table for a formatted view
-    (echo "$table_header"; echo "$events_csv") | "$GUM_CMD" table --separator ","
+    (echo "$table_header"; echo "$events_csv") | "$GUM_CMD" table --print --separator ","
 }
