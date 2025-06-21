@@ -1,0 +1,83 @@
+# ----------------------------------------------------
+#  Checks for and identifies sources of WP-CLI warnings.
+# ----------------------------------------------------
+function wpcli_check() {
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+
+    echo "🚀 Checking for WP-CLI warnings..."
+
+    # 1. Run with everything skipped to check for core issues.
+    local base_warnings
+    base_warnings=$("$WP_CLI_CMD" plugin list --skip-themes --skip-plugins 2>&1 >/dev/null)
+
+    if [[ -n "$base_warnings" ]]; then
+        echo "⚠️ Found warnings even with all plugins and themes skipped. This might be a WP-CLI core or WordPress core issue."
+        echo "--- Warnings ---"
+        echo "$base_warnings"
+        echo "----------------"
+        return 1
+    fi
+
+    # 2. Run with everything active to get a baseline.
+    local initial_warnings
+    initial_warnings=$("$WP_CLI_CMD" plugin list 2>&1 >/dev/null)
+
+    if [[ -z "$initial_warnings" ]]; then
+        echo "✅ WP-CLI is running smoothly. No warnings detected."
+        return 0
+    fi
+
+    echo "⚠️ WP-CLI produced warnings. Investigating the source..."
+    echo
+    echo "--- Initial Warnings Found ---"
+    echo "$initial_warnings"
+    echo "----------------------------"
+    echo
+
+    local culprit_found=false
+
+    # 3. Check theme impact
+    echo "Testing for theme conflicts..."
+    local warnings_without_theme
+    warnings_without_theme=$("$WP_CLI_CMD" plugin list --skip-themes 2>&1 >/dev/null)
+    if [[ -z "$warnings_without_theme" ]]; then
+        local active_theme
+        active_theme=$("$WP_CLI_CMD" theme list --status=active --field=name)
+        echo "✅ Problem resolved by skipping themes. The active theme '$active_theme' is the likely source of the warnings."
+        culprit_found=true
+    else
+        echo "No warnings seem to originate from the theme."
+    fi
+
+    # 4. Check plugin impact
+    echo "Testing for plugin conflicts..."
+    local active_plugins=()
+    while IFS= read -r line; do
+        active_plugins+=("$line")
+    done < <("$WP_CLI_CMD" plugin list --field=name --status=active)
+
+    if [[ ${#active_plugins[@]} -eq 0 ]]; then
+        echo "ℹ️ No active plugins found to test."
+    else
+        echo "Comparing output when skipping each of the ${#active_plugins[@]} active plugins..."
+        for plugin in "${active_plugins[@]}"; do
+            printf "  - Testing by skipping '%s'... " "$plugin"
+            local warnings_without_plugin
+            warnings_without_plugin=$("$WP_CLI_CMD" plugin list --skip-plugins="$plugin" 2>&1 >/dev/null)
+
+            if [[ -z "$warnings_without_plugin" ]]; then
+                printf "FOUND CULPRIT\n"
+                echo "  ✅ Warnings disappeared when skipping '$plugin'. This plugin is a likely source of the warnings."
+                culprit_found=true
+            else
+                 printf "no change\n"
+            fi
+        done
+    fi
+    echo
+    if ! $culprit_found; then
+        echo "ℹ️ Could not isolate a single plugin or theme as the source. The issue might be from a combination of plugins or WordPress core itself."
+    fi
+    echo "✅ Check complete."
+}

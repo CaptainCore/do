@@ -31,9 +31,9 @@ function _get_private_dir() {
     fi
 
     # --- Tier 1: Preferred WP-CLI Method ---
-    if command -v wp &>/dev/null; then
+    if setup_wp_cli; then
         local wp_config_path
-        wp_config_path=$(wp config path --quiet 2>/dev/null)
+        wp_config_path=$("$WP_CLI_CMD" config path --quiet 2>/dev/null)
         if [ -n "$wp_config_path" ] && [ -f "$wp_config_path" ]; then
             local wp_root
             wp_root=$(dirname "$wp_config_path")
@@ -70,12 +70,12 @@ function _get_private_dir() {
     # --- Tier 2: Manual Fallback (if WP-CLI fails or not in a WP install) ---
     local current_dir
     current_dir=$(pwd)
-    if [ -d "${current_dir}/_wpeprivate" ]; then # WPE check 
+    if [ -d "${current_dir}/_wpeprivate" ]; then # WPE check
         CAPTAINCORE_PRIVATE_DIR="${current_dir}/_wpeprivate"
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
-    if [ -d "../private" ]; then # Relative private check 
+    if [ -d "../private" ]; then # Relative private check
         CAPTAINCORE_PRIVATE_DIR=$(cd ../private && pwd)
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
@@ -85,14 +85,14 @@ function _get_private_dir() {
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
-    if [ -d "../tmp" ]; then # Relative tmp check 
+    if [ -d "../tmp" ]; then # Relative tmp check
         CAPTAINCORE_PRIVATE_DIR=$(cd ../tmp && pwd)
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
 
     # --- Tier 3: Last Resort Fallback to Home Directory ---
-    if mkdir -p "$HOME/private"; then # Home directory check 
+    if mkdir -p "$HOME/private"; then # Home directory check
         CAPTAINCORE_PRIVATE_DIR="$HOME/private"
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
@@ -472,6 +472,14 @@ function show_command_help() {
             echo
             echo "Usage: _do version"
             ;;
+        wpcli)
+            echo "Checks for and identifies sources of WP-CLI warnings."
+            echo
+            echo "Usage: _do wpcli <subcommand>"
+            echo
+            echo "Subcommands:"
+            echo "  check     Runs a check to find themes or plugins causing WP-CLI warnings."
+            ;;
         *)
             echo "Error: Unknown command '$cmd' for help." >&2
             echo ""
@@ -509,6 +517,7 @@ function show_usage() {
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
     echo "  update              Runs WordPress updates and logs the changes."
     echo "  version             Displays the current version of the _do script."
+    echo "  wpcli               Checks for and identifies sources of WP-CLI warnings."
     echo ""
     echo "Run '_do help <command>' for more information on a specific command."
 }
@@ -827,6 +836,18 @@ function main() {
             ;;
         version|--version|-v)
             show_version
+            ;;
+        wpcli)
+            local subcommand="${positional_args[1]}"
+            case "$subcommand" in
+                check)
+                    wpcli_check
+                    ;;
+                *)
+                    show_command_help "wpcli"
+                    exit 0
+                    ;;
+            esac
             ;;
         *)
             echo "Error: Unknown command '$command'." >&2
