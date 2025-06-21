@@ -47,8 +47,23 @@ if ($action === 'list_all') {
     usort($events, function($a, $b) {
         return ($a['next_run'] ?? 0) <=> ($b['next_run'] ?? 0);
     });
+
+    // MODIFICATION: Get the WordPress timezone once before the loop.
+    $wp_timezone = wp_timezone();
+
     foreach ($events as $event) {
-        $next_run_formatted = isset($event['next_run']) ? date('Y-m-d H:i:s T', $event['next_run']) : 'N/A';
+        
+        // MODIFICATION: Convert the stored UTC timestamp to the WP timezone for display.
+        $next_run_formatted = 'N/A';
+        if (isset($event['next_run'])) {
+            // Create a DateTime object from the UTC timestamp
+            $next_run_dt = new DateTime("@" . $event['next_run']);
+            // Set the object's timezone to the WordPress configured timezone
+            $next_run_dt->setTimezone($wp_timezone);
+            // Format for output
+            $next_run_formatted = $next_run_dt->format('Y-m-d H:i:s T');
+        }
+        
         // Output in CSV format for gum table
         echo implode(',', [
             $event['id'] ?? 'N/A',
@@ -72,35 +87,35 @@ elseif ($action === 'list_due') {
 
 elseif ($action === 'add') {
     $id = uniqid('event_');
-    $command = $argv[2] ?? null;
+    $command = $argv[2] ?? null; 
     $next_run_str = $argv[3] ?? null;
-    $frequency = $argv[4] ?? null;
+    $frequency = $argv[4] ?? null; 
 
     if (!$command || !$next_run_str || !$frequency) {
-        error_log('Error: Missing arguments for add action.'); 
+        error_log('Error: Missing arguments for add action.');
         return;
     }
 
     // --- Frequency Translation ---
-    // Make frequency more robust by translating common terms.
     $freq_lower = strtolower($frequency); 
     if ($freq_lower === 'weekly') {
-        $frequency = '1 week'; 
+        $frequency = '1 week';
     } elseif ($freq_lower === 'daily') {
-        $frequency = '1 day'; 
+        $frequency = '1 day';
     } elseif ($freq_lower === 'monthly') {
-        $frequency = '1 month'; 
+        $frequency = '1 month';
     } elseif ($freq_lower === 'hourly') {
-        $frequency = '1 hour'; 
+        $frequency = '1 hour';
     }
     // --- End Translation ---
 
     try {
-        // Use PHP's robust date/time parsing
-        $next_run_dt = new DateTime($next_run_str, new DateTimeZone('UTC'));
-        $next_run_timestamp = $next_run_dt->getTimestamp(); 
+        // Use the WordPress configured timezone for parsing the date string.
+        $wp_timezone = wp_timezone();
+        $next_run_dt = new DateTime($next_run_str, $wp_timezone);
+        $next_run_timestamp = $next_run_dt->getTimestamp();
     } catch (Exception $e) {
-        error_log('Error: Invalid date/time string for next_run: ' . $e->getMessage()); 
+        error_log('Error: Invalid date/time string for next_run: ' . $e->getMessage());
         return;
     }
     
@@ -111,8 +126,8 @@ elseif ($action === 'add') {
         'next_run'  => $next_run_timestamp,
         'frequency' => $frequency,
     ];
-    save_events($events); 
-    echo "✅ Event '$id' added. Command: '_do $command'. Next run: " . date('Y-m-d H:i:s T', $next_run_timestamp) . "\n";
+    save_events($events);
+    echo "✅ Event '$id' added. Input '{$next_run_str}' interpreted using WordPress timezone ({$wp_timezone->getName()}). Next run: " . date('Y-m-d H:i:s T', $next_run_timestamp) . "\n";
 }
 
 elseif ($action === 'delete') {
@@ -142,10 +157,10 @@ elseif ($action === 'delete') {
 }
 
 elseif ($action === 'update_next_run') {
-    $id = $argv[2] ?? null; 
+    $id = $argv[2] ?? null;
     if (!$id) {
         error_log('Error: No ID provided to update_next_run.'); 
-        return; 
+        return;
     }
 
     $events = get_events(); 
@@ -153,27 +168,26 @@ elseif ($action === 'update_next_run') {
     foreach ($events as &$event) {
         if (isset($event['id']) && $event['id'] === $id) {
             try {
-                // Calculate next run based on the event's last scheduled run and frequency
-                $last_run_ts = $event['next_run'] ?? time();
+                $last_run_ts = $event['next_run'] ??
+                    time();
                 $next_run_dt = new DateTime("@{$last_run_ts}", new DateTimeZone('UTC'));
                 
-                // In case the event is very overdue, keep adding the frequency until it's in the future.
                 do {
                     $next_run_dt->modify('+ ' . $event['frequency']);
                 } while ($next_run_dt->getTimestamp() <= time());
 
-                $event['next_run'] = $next_run_dt->getTimestamp();
+                $event['next_run'] = $next_run_dt->getTimestamp(); 
                 $found = true;
                 break;
             } catch (Exception $e) {
-                 error_log('Error: Invalid frequency string "' . ($event['frequency'] ?? '') . '": ' . $e->getMessage()); 
+                 error_log('Error: Invalid frequency string "' . ($event['frequency'] ?? '') . '": ' . $e->getMessage());
                  return;
             }
         }
     }
 
     if ($found) {
-        save_events($events); 
+        save_events($events);
     }
 }
 PHP
