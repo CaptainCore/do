@@ -786,6 +786,7 @@ PHP
 
                     # Loop to allow viewing multiple diffs
                     while true; do
+                        clear
                         local selected_file
                         selected_file=$(echo "$changed_files" | "$GUM_CMD" filter --prompt="? Select a file to view its diff (Press Esc to exit)" --height=20 --indicator="→" --placeholder="")
 
