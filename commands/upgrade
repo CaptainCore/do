@@ -1,0 +1,121 @@
+# ----------------------------------------------------
+#  Upgrades the _do script to the latest version.
+# ----------------------------------------------------
+function run_upgrade() {
+    echo "🚀 Checking for the latest version of _do..."
+
+    # --- Pre-flight Checks ---
+    if ! command -v curl &> /dev/null; then echo "❌ Error: curl is required for upgrades." >&2; return 1; fi
+    if ! command -v grep &> /dev/null; then echo "❌ Error: grep is required for upgrades." >&2; return 1; fi
+    if ! command -v realpath &> /dev/null; then echo "❌ Error: realpath is required for upgrades." >&2; return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    # --- Download latest version to a temporary file ---
+    local upgrade_url="https://github.com/CaptainCore/do/releases/latest/download/_do.sh"
+    local temp_file
+    temp_file=$(mktemp)
+    if ! curl -sL "$upgrade_url" -o "$temp_file"; then
+        echo "❌ Error: Failed to download the latest version from $upgrade_url" >&2
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    # --- Extract version numbers ---
+    local new_version
+    new_version=$(grep 'CAPTAINCORE_DO_VERSION=' "$temp_file" | head -n1 | cut -d'"' -f2)
+
+    if [ -z "$new_version" ]; then
+        echo "❌ Error: Could not determine the version number from the downloaded file." >&2
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    local current_version="$CAPTAINCORE_DO_VERSION"
+    echo "   - Current version: $current_version"
+    echo "   - Latest version:  $new_version"
+
+    # --- Determine install path & type ---
+    local install_path
+    local current_script_path
+    local is_system_install=false
+    
+    # Try to determine the path of the running script
+    current_script_path=$(realpath "$0" 2>/dev/null)
+
+    # Check if the script is running from a common system binary path
+    if [[ -n "$current_script_path" && -f "$current_script_path" ]]; then
+        if [[ "$current_script_path" == /usr/local/bin/* || "$current_script_path" == /usr/bin/* || "$current_script_path" == /bin/* ]]; then
+            is_system_install=true
+        fi
+    fi
+
+    # --- Handle Different Scenarios ---
+    if [[ "$is_system_install" == "true" ]]; then
+        # --- UPGRADE SCENARIO for an existing system install ---
+        echo "   - Found existing system installation at: $current_script_path"
+        install_path="$current_script_path"
+
+        local latest_available
+        latest_available=$(printf '%s\n' "$new_version" "$current_version" | sort -V | tail -n1)
+        
+        if [[ "$new_version" == "$current_version" ]]; then
+            echo "✅ You are already using the latest version ($current_version)."
+            if ! "$GUM_CMD" confirm "Do you want to reinstall it anyway?"; then
+                rm -f "$temp_file"
+                return 0
+            fi
+        elif [[ "$latest_available" == "$current_version" ]]; then
+             echo "✅ You are running a newer version ($current_version) than the latest release ($new_version). No action taken."
+             rm -f "$temp_file"
+             return 0
+        fi
+        echo "   - Upgrading to version $new_version..."
+
+    else
+        # --- NEW INSTALL SCENARIO (for dev scripts or curl|bash) ---
+        if [[ -n "$current_script_path" && -f "$current_script_path" ]]; then
+            echo "   - Running from a local script. Treating as a new system-wide installation."
+        else
+             echo "   - No physical script found. Treating as a new system-wide installation."
+        fi
+        
+        install_path="/usr/local/bin/_do"
+        echo "   - Target install location: $install_path"
+
+        # If the target already exists, check its version to avoid unnecessary work
+        if [ -f "$install_path" ]; then
+            local existing_install_version
+            existing_install_version=$(grep 'CAPTAINCORE_DO_VERSION=' "$install_path" | head -n1 | cut -d'"' -f2)
+            if [[ "$new_version" == "$existing_install_version" ]]; then
+                echo "✅ The latest version ($new_version) is already installed at $install_path. No action taken."
+                rm -f "$temp_file"
+                return 0
+            fi
+        fi
+    fi
+    
+    # --- Perform the installation/upgrade ---
+    echo "   - Installing to $install_path..."
+
+    # Make the downloaded script executable
+    chmod +x "$temp_file"
+
+    # Check for write permissions and use sudo if needed
+    if [ -w "$(dirname "$install_path")" ]; then
+        if ! mv "$temp_file" "$install_path"; then
+            echo "❌ Error: Failed to move the new version to $install_path." >&2
+            rm -f "$temp_file" # Clean up temp file on failure
+            return 1
+        fi
+    else
+        echo "   - Write permission is required for the directory $(dirname "$install_path")."
+        echo "   - You may be prompted for your password to complete the installation."
+        if ! sudo mv "$temp_file" "$install_path"; then
+            echo "❌ Error: sudo command failed. Could not complete installation/upgrade." >&2
+            rm -f "$temp_file" # Clean up temp file on failure
+            return 1
+        fi
+    fi
+
+    echo "✅ Success! _do version $new_version is now installed at $install_path."
+}

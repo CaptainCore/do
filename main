@@ -480,6 +480,11 @@ function show_command_help() {
             echo "  list                Shows a list of past updates to inspect from the generated list."
             echo "  list-generate       Generates a detailed list of all updates for fast viewing."
             ;;
+        upgrade)
+            echo "Upgrades the _do script to the latest version."
+            echo
+            echo "Usage: _do upgrade"
+            ;;
         version)
             echo "Displays the current version of the _do script."
             echo
@@ -530,6 +535,7 @@ function show_usage() {
     echo "  slow-plugins        Identifies plugins that may be slowing down WP-CLI."
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
     echo "  update              Runs WordPress updates and logs the changes."
+    echo "  upgrade             Upgrades this script to the latest version."
     echo "  version             Displays the current version of the _do script."
     echo "  wpcli               Checks for and identifies sources of WP-CLI warnings."
     echo ""
@@ -875,6 +881,9 @@ function main() {
                     exit 1
                     ;;
             esac
+            ;;
+        upgrade)
+            run_upgrade
             ;;
         version|--version|-v)
             show_version
