@@ -1,0 +1,125 @@
+# ----------------------------------------------------
+#  Installs helper and premium plugins.
+# ----------------------------------------------------
+
+# ----------------------------------------------------
+#  Installs the Kinsta Must-Use plugin.
+# ----------------------------------------------------
+function install_kinsta_mu() {
+    local force_flag="$1"
+
+    # Check if this is a Kinsta environment unless --force is used
+    if [[ "$force_flag" != "true" ]]; then
+        if [ ! -f "/etc/update-motd.d/00-kinsta-welcome" ]; then
+            echo "ℹ️ This does not appear to be a Kinsta environment. Skipping installation." >&2
+            echo "   Use the --force flag to install anyway." >&2
+            return 0
+        fi
+    else
+        echo "✅ --force flag detected. Skipping Kinsta environment check."
+    fi
+
+    echo "🚀 Installing Kinsta MU plugin..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! command -v wget &>/dev/null; then echo "❌ Error: wget not found." >&2; return 1; fi
+    if ! command -v unzip &>/dev/null; then echo "❌ Error: unzip not found." >&2; return 1; fi
+
+    # Get wp-content path dynamically for reliability
+    local wp_content_dir
+    wp_content_dir=$("$WP_CLI_CMD" eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
+    if [ -z "$wp_content_dir" ] || [ ! -d "$wp_content_dir" ]; then
+        echo "❌ Error: Could not determine wp-content directory." >&2
+        return 1
+    fi
+    
+    local mu_plugins_dir="${wp_content_dir}/mu-plugins"
+    if [ ! -d "$mu_plugins_dir" ]; then
+        echo "Creating directory: $mu_plugins_dir"
+        mkdir -p "$mu_plugins_dir"
+    fi
+
+    # --- Installation ---
+    local kinsta_zip_file="kinsta-mu-plugins.zip"
+    
+    # Download to the private directory to avoid clutter
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        return 1
+    fi
+    local temp_zip_path="${private_dir}/${kinsta_zip_file}"
+
+    if wget -q https://kinsta.com/kinsta-tools/kinsta-mu-plugins.zip -O "$temp_zip_path"; then
+        unzip -o -q "$temp_zip_path" -d "$mu_plugins_dir/"
+        rm "$temp_zip_path"
+        echo "✅ Kinsta MU plugin installed successfully to ${mu_plugins_dir}/."
+    else
+        echo "❌ Error: Could not download the Kinsta MU plugin."
+        # Clean up failed download
+        [ -f "$temp_zip_path" ] && rm "$temp_zip_path"
+        return 1
+    fi
+}
+
+# ----------------------------------------------------
+#  Installs the CaptainCore Helper plugin.
+# ----------------------------------------------------
+function install_helper() {
+    echo "🚀 Deploying CaptainCore Helper..."
+
+    # --- Pre-flight Checks ---
+    if ! command -v curl &>/dev/null; then echo "❌ Error: curl not found." >&2; return 1; fi
+
+    # --- Deployment ---
+    if curl -sSL https://run.captaincore.io/deploy-helper | bash -s; then
+        echo "✅ CaptainCore Helper deployed successfully."
+    else
+        echo "❌ Error: Failed to deploy CaptainCore Helper."
+        return 1
+    fi
+}
+
+# ----------------------------------------------------
+#  Installs The Events Calendar Pro.
+# ----------------------------------------------------
+function install_events_calendar_pro() {
+    echo "🚀 Installing The Events Calendar Pro..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "Aborting: gum setup failed." >&2; return 1; fi
+    
+    # --- Get License Key ---
+    local license_key
+    license_key=$("$GUM_CMD" input --placeholder="Enter Events Calendar Pro license key..." --password)
+
+    if [ -z "$license_key" ]; then
+        echo "❌ No license key provided. Aborting installation." >&2
+        return 1
+    fi
+
+    # --- Installation Steps ---
+    echo "Step 1/3: Installing 'The Events Calendar' (free version)..."
+    if ! "$WP_CLI_CMD" plugin install the-events-calendar --force --activate; then
+        echo "❌ Error: Failed to install the free version of The Events Calendar." >&2
+        return 1
+    fi
+
+    echo "Step 2/3: Saving license key..."
+    if ! "$WP_CLI_CMD" option update pue_install_key_events_calendar_pro "$license_key"; then
+        echo "❌ Error: Failed to save the license key to the database." >&2
+        return 1
+    fi
+
+    echo "Step 3/3: Installing 'Events Calendar Pro'..."
+    local pro_plugin_url="https://pue.tri.be/api/plugins/v2/download?plugin=events-calendar-pro&key=$license_key"
+    if ! "$WP_CLI_CMD" plugin install "$pro_plugin_url" --force --activate; then
+        echo "❌ Error: Failed to install Events Calendar Pro. Please check your license key." >&2
+        return 1
+    fi
+
+    echo "✅ The Events Calendar Pro installed and activated successfully."
+}

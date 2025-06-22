@@ -392,6 +392,16 @@ function show_command_help() {
             echo "Flags:"
             echo "  --all    Convert all images, regardless of size. Defaults to images > 1MB."
             ;;
+         install)
+            echo "Installs helper or premium plugins."
+            echo
+            echo "Usage: _do install <subcommand> [--flags]"
+            echo
+            echo "Subcommands:"
+            echo "  kinsta-mu            Installs the Kinsta MU plugin. Use --force to install outside a Kinsta environment."
+            echo "  helper               Installs the CaptainCore Helper plugin."
+            echo "  events-calendar-pro  Installs The Events Calendar and its Pro version after prompting for a license."
+            ;;
         migrate)
             echo "Migrates a site from a backup snapshot."
             echo
@@ -511,6 +521,7 @@ function show_usage() {
     echo "  cron                Manages cron jobs and schedules tasks to run at specific times."
     echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
+    echo "  install             Installs helper plugins or premium plugins."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server logs or errors in real-time."
     echo "  php-tags            Finds outdated or invalid PHP opening tags."
@@ -571,6 +582,7 @@ function main() {
     local admin_email_flag=""
     local path_flag=""
     local all_files_flag=""
+    local force_flag=""
     local exclude_patterns=()
     local positional_args=()
     
@@ -614,6 +626,10 @@ function main() {
           ;;
         --all)
           all_files_flag=true
+          shift
+          ;;
+        --force)
+          force_flag=true
           shift
           ;;
         --path=*)
@@ -762,6 +778,24 @@ function main() {
                 return 1
             fi
             run_dump "${positional_args[1]}" "${exclude_patterns[@]}"
+            ;;
+        install)
+            local subcommand="${positional_args[1]}"
+            case "$subcommand" in
+                kinsta-mu)
+                    install_kinsta_mu "$force_flag"
+                    ;;
+                helper)
+                    install_helper
+                    ;;
+                events-calendar-pro)
+                    install_events_calendar_pro
+                    ;;
+                *)
+                    show_command_help "install"
+                    exit 0
+                    ;;
+            esac
             ;;
         migrate)
             if [[ -z "$url_flag" ]]; then
