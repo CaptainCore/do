@@ -387,7 +387,10 @@ function show_command_help() {
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
             echo
-            echo "Usage: _do convert-to-webp"
+            echo "Usage: _do convert-to-webp [--all]"
+            echo
+            echo "Flags:"
+            echo "  --all    Convert all images, regardless of size. Defaults to images > 1MB."
             ;;
         migrate)
             echo "Migrates a site from a backup snapshot."
@@ -567,6 +570,7 @@ function main() {
     local admin_user_flag=""
     local admin_email_flag=""
     local path_flag=""
+    local all_files_flag=""
     local exclude_patterns=()
     local positional_args=()
     
@@ -606,6 +610,10 @@ function main() {
           ;;
         --admin_email=*)
           admin_email_flag="${1#*=}"
+          shift
+          ;;
+        --all)
+          all_files_flag=true
           shift
           ;;
         --path=*)
@@ -743,7 +751,7 @@ function main() {
             esac
             ;;
         convert-to-webp)
-            convert_to_webp
+            convert_to_webp "$all_files_flag"
             ;;
         dump)
             # There should be exactly 2 positional args total: 'dump' and the pattern.

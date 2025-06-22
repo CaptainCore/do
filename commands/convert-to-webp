@@ -2,6 +2,7 @@
 #  Finds large images and converts them to the WebP format.
 # ----------------------------------------------------
 function convert_to_webp() {
+    local all_files_flag="$1"
     echo "🚀 Starting WebP Conversion Process 🚀"
     if ! setup_cwebp; then 
         echo "Aborting conversion: cwebp setup failed." >&2 
@@ -10,14 +11,27 @@ function convert_to_webp() {
     if ! command -v identify &> /dev/null; then echo "❌ Error: 'identify' command not found. Please install ImageMagick." >&2; return 1; fi 
     local uploads_dir="wp-content/uploads"; if [ ! -d "$uploads_dir" ]; then echo "❌ Error: Cannot find '$uploads_dir' directory." >&2; return 1; fi 
     local before_size; before_size="$(du -sh "$uploads_dir" | awk '{print $1}')"; 
-    echo "Current uploads size: $before_size" 
+    echo "Current uploads size: $before_size"
+    local size_limit_mb=1
+    local message="larger than ${size_limit_mb}MB"
+    local find_args=("$uploads_dir" -type f)
+    if [[ "$all_files_flag" != "true" ]]; then
+        find_args+=(-size "+${size_limit_mb}M")
+    else
+        message="of all sizes"
+    fi
+    find_args+=(\( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" \))
+
     local files;
-    files=$(find "$uploads_dir" -type f -size +1M \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" \)) 
-    if [[ -z "$files" ]]; then 
-        echo "✅ No images larger than 1MB found to convert."; return 0; 
+    files=$(find "${find_args[@]}")
+
+    if [[ -z "$files" ]]; then
+        echo "✅ No images ${message} found to convert.";
+        return 0;
     fi
     local count;
-    count=$(echo "$files" | wc -l); echo "Found $count image(s) over 1MB to process..."; 
+    count=$(echo "$files" | wc -l);
+    echo "Found $count image(s) ${message} to process...";
     echo "" 
     echo "$files" | while IFS= read -r file; do 
         if [[ "$(identify -format "%m" "$file")" == "WEBP" ]]; then 
