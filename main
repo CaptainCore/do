@@ -16,6 +16,7 @@ GIT_VERSION="2.50.0"
 GUM_CMD=""
 CWEBP_CMD=""
 WP_CLI_CMD=""
+RESTIC_CMD=""
 
 # --- Helper Functions ---
 
@@ -241,6 +242,58 @@ function setup_rclone() {
         RCLONE_CMD="$rclone_executable"
     else
         echo "Error: rclone installation failed." >&2
+        cd - > /dev/null
+        return 1
+    fi
+    cd - > /dev/null
+}
+
+# ----------------------------------------------------
+#  Checks for and installs 'restic' if not present.
+#  Sets RESTIC_CMD on success.
+# ----------------------------------------------------
+function setup_restic() {
+    #  Return if already found
+    if [[ -n "$RESTIC_CMD" ]]; then return 0; fi
+
+    #  If restic is already in the PATH, we're good.
+    if command -v restic &> /dev/null; then
+        RESTIC_CMD="restic"
+        return 0
+    fi
+
+    # Check for local installation in private dir
+    local restic_executable="$HOME/private/restic"
+    if [ -f "$restic_executable" ] && "$restic_executable" version &> /dev/null; then
+        RESTIC_CMD="$restic_executable"
+        return 0
+    fi
+
+    #  If not found, download it
+    echo "Required tool 'restic' not found. Installing..." >&2
+    if ! command -v bunzip2 &>/dev/null; then echo "Error: 'bunzip2' command is required for installation." >&2; return 1; fi
+    mkdir -p "$HOME/private"
+    cd "$HOME/private" || { echo "Error: Could not enter ~/private." >&2; return 1; }
+
+    local restic_version="0.18.0"
+    local restic_archive="restic_${restic_version}_linux_amd64.bz2"
+    if ! curl -sL "https://github.com/restic/restic/releases/download/v${restic_version}/${restic_archive}" -o "${restic_archive}"; then
+        echo "Error: Failed to download restic." >&2
+        cd - > /dev/null
+        return 1
+    fi
+
+    # Decompress and extract the binary
+    bunzip2 -c "${restic_archive}" > restic_temp && mv restic_temp restic
+    rm -f "${restic_archive}"
+    chmod +x restic
+
+    #  Final check
+    if [ -f "$restic_executable" ] && "$restic_executable" version &> /dev/null; then
+        echo "'restic' installed successfully." >&2
+        RESTIC_CMD="$restic_executable"
+    else
+        echo "Error: restic installation failed." >&2
         cd - > /dev/null
         return 1
     fi
@@ -485,6 +538,18 @@ function show_command_help() {
             echo
             echo "Usage: _do upgrade"
             ;;
+        vault)
+            echo "Creates a secure, full site snapshot in a remote Restic repository."
+            echo
+            echo "Usage: cat secrets.txt | _do vault"
+            echo
+            echo "Reads secrets from stdin. The 'secrets.txt' file must contain 5 lines in order:"
+            echo "  1. B2 Bucket Name"
+            echo "  2. Path within Bucket (e.g., 'production/site-slug')"
+            echo "  3. B2 Key ID"
+            echo "  4. B2 Application Key"
+            echo "  5. Restic Repository Password"
+            ;;
         version)
             echo "Displays the current version of the _do script."
             echo
@@ -536,6 +601,7 @@ function show_usage() {
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
     echo "  update              Runs WordPress updates and logs the changes."
     echo "  upgrade             Upgrades this script to the latest version."
+    echo "  vault               Creates a secure, full site snapshot in a remote Restic repo."
     echo "  version             Displays the current version of the _do script."
     echo "  wpcli               Checks for and identifies sources of WP-CLI warnings."
     echo ""
@@ -884,6 +950,9 @@ function main() {
             ;;
         upgrade)
             run_upgrade
+            ;;
+        vault)
+            run_vault
             ;;
         version|--version|-v)
             show_version
