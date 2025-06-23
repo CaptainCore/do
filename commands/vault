@@ -1,15 +1,8 @@
 # ----------------------------------------------------
 #  Performs a full site backup to a Restic repository on B2.
-#  Credentials must be piped via stdin.
+#  Credentials can be injected via environment variables or piped via stdin.
 # ----------------------------------------------------
 function run_vault() {
-    # --- Check if stdin is coming from a pipe or a terminal ---
-    if [ -t 0 ]; then
-        echo "❌ Error: This command requires credentials to be piped via standard input." >&2
-        echo "   Usage: cat /path/to/secrets.txt | _do vault" >&2
-        return 1
-    fi
-
     echo "🚀 Starting secure snapshot to Restic B2 repository..."
 
     # --- Pre-flight Checks ---
@@ -21,31 +14,49 @@ function run_vault() {
         return 1
     fi
 
-    # --- Read Credentials from Standard Input ---
+    # --- Read Credentials ---
     local b2_bucket b2_path b2_key_id b2_app_key restic_password
-    read -r b2_bucket
-    read -r b2_path
-    read -r b2_key_id
-    read -r b2_app_key
-    read -r restic_password
+    
+    # MODE 1: Check for pre-existing environment variables first.
+    if [ -n "$B2_ACCOUNT_ID" ]; then
+        echo "   - Found credentials in environment variables."
+        b2_bucket="$B2_BUCKET"
+        b2_path="$B2_PATH"
+        b2_key_id="$B2_ACCOUNT_ID"
+        b2_app_key="$B2_ACCOUNT_KEY"
+        restic_password="$RESTIC_PASSWORD"
+    else
+    # MODE 2: Fall back to reading from stdin.
+        if [ -t 0 ]; then # Check if stdin is a terminal (i.e., not a pipe)
+            echo "❌ Error: This command requires credentials." >&2
+            echo "   Please either pipe them via stdin OR set them as environment variables." >&2
+            echo "   Usage: cat /path/to/secrets.txt | _do vault" >&2
+            return 1
+        fi
+        echo "   - Reading credentials from standard input..."
+        read -r b2_bucket
+        read -r b2_path
+        read -r b2_key_id
+        read -r b2_app_key
+        read -r restic_password
+    fi
 
+    # Universal validation for both methods.
     if [ -z "$b2_bucket" ] || [ -z "$b2_path" ] || [ -z "$b2_key_id" ] || [ -z "$b2_app_key" ] || [ -z "$restic_password" ]; then
-        echo "❌ Error: One or more required values could not be read from stdin." >&2
-        echo "   Please ensure your secrets file has 5 non-empty lines." >&2
+        echo "❌ Error: One or more required credentials were not found or were empty." >&2
         return 1
     fi
 
-    # --- Set Environment Variables for Restic ---
+    # --- Set Environment Variables for Restic B2 Backend ---
     export B2_ACCOUNT_ID="$b2_key_id"
     export B2_ACCOUNT_KEY="$b2_app_key"
-    export RESTIC_PASSWORD="$restic_password"
     local restic_repo="b2:${b2_bucket}:${b2_path}"
 
     # --- Check/Initialize Restic Repository ---
     echo "   - Checking for repository at b2:${b2_bucket}:${b2_path}..."
-    if ! "$RESTIC_CMD" -r "$restic_repo" stats >/dev/null 2>&1; then
+    if ! "$RESTIC_CMD" --repo "$restic_repo" --password-command="echo \"$restic_password\"" stats >/dev/null 2>&1; then
         echo "   - Repository not found or is invalid. Attempting to initialize..."
-        if ! "$RESTIC_CMD" -r "$restic_repo" init; then
+        if ! "$RESTIC_CMD" --repo "$restic_repo" --password-command="echo \"$restic_password\"" init; then
             echo "❌ Error: Failed to initialize Restic repository." >&2
             return 1
         fi
@@ -63,21 +74,18 @@ function run_vault() {
     local zip_file_path="${wp_root_dir}/${db_filename_base}.zip"
 
     echo "   - Generating temporary database dump: $(basename "$sql_file_path")"
-    # Hide the "Success: Exported to..." message by redirecting stdout to /dev/null
     if ! "$WP_CLI_CMD" db export "$sql_file_path" --add-drop-table > /dev/null; then
         echo "❌ Error: Database export failed." >&2
         return 1
     fi
     
     echo "   - Compressing database dump to zip format..."
-    # Use -q for quiet operation and -j to junk paths, storing only the file.
     if ! zip -q -j "$zip_file_path" "$sql_file_path"; then
         echo "❌ Error: Failed to zip the database dump." >&2
-        rm -f "$sql_file_path" # Clean up uncompressed file
+        rm -f "$sql_file_path"
         return 1
     fi
     
-    # Remove the uncompressed SQL file immediately after zipping
     rm -f "$sql_file_path"
 
     # --- Run Restic Backup ---
@@ -86,21 +94,20 @@ function run_vault() {
     cd "$wp_root_dir" || { echo "❌ Error: Could not change to WordPress root directory."; rm -f "$zip_file_path"; return 1; }
 
     echo "   - Backing up current directory (.), which now includes the zipped database dump..."
-    if ! "$RESTIC_CMD" -r "$restic_repo" backup --verbose --tag "$site_slug" --tag "wordpress" "."; then
+    if ! "$RESTIC_CMD" --repo "$restic_repo" --password-command="echo \"$restic_password\"" backup --verbose --tag "$site_slug" --tag "wordpress" "."; then
         echo "❌ Error: Restic backup command failed." >&2
-        # Cleanup and return to original directory even on failure
         rm -f "$zip_file_path"
         cd "$original_dir"
         return 1
     fi
     
     # --- Cleanup ---
-    cd "$original_dir" # IMPORTANT: Return to the original directory
+    cd "$original_dir"
     echo "   - Cleaning up temporary database dump..."
     rm -f "$zip_file_path"
 
-    # Unset secrets for security
-    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD
+    # Unset B2 variables for security
+    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY
 
     echo "✅ Vault snapshot complete!"
 }
