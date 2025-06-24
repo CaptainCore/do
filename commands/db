@@ -32,10 +32,10 @@ function db_check_autoload() {
 
     echo
     echo "--- Total Autoloaded Size ---"
-    "$WP_CLI_CMD" db query "SELECT ROUND(SUM(LENGTH(option_value))/1024/1024, 2) as 'Autoload MB', COUNT(*) as 'Count' FROM $($WP_CLI_CMD db prefix)options WHERE autoload='yes';" | "$GUM_CMD" table --print --separator $'\t'
+    "$WP_CLI_CMD" db query "SELECT ROUND(SUM(LENGTH(option_value))/1024/1024, 2) as 'Autoload MB', COUNT(*) as 'Count' FROM $($WP_CLI_CMD db prefix)options WHERE autoload IN ('yes', 'on');" | "$GUM_CMD" table --print --separator $'\t'
     echo
     echo "--- Top 25 Autoloaded Options & Totals ---"
-    "$WP_CLI_CMD" db query "SELECT option_name, round(length(option_value) / 1024 / 1024, 2) as 'Size (MB)' FROM $($WP_CLI_CMD db prefix)options WHERE autoload='yes' ORDER BY length(option_value) DESC LIMIT 25" | "$GUM_CMD" table --print --separator $'\t'
+    "$WP_CLI_CMD" db query "SELECT option_name, round(length(option_value) / 1024 / 1024, 2) as 'Size (MB)' FROM $($WP_CLI_CMD db prefix)options WHERE autoload IN ('yes', 'on') ORDER BY length(option_value) DESC LIMIT 25" | "$GUM_CMD" table --print --separator $'\t'
     echo
     echo "✅ Autoload check complete."
 }
