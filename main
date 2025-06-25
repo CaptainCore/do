@@ -123,145 +123,194 @@ function _get_private_dir() {
 #  Checks for and installs 'gum' if not present. Sets GUM_CMD on success.
 # ----------------------------------------------------
 function setup_gum() {
-    #  Return if already found
+    # Return if already found
     if [[ -n "$GUM_CMD" ]]; then return 0; fi
 
-    #  If gum is already in the PATH, we're good to go.
+    # If gum is already in the PATH, we're good to go.
     if command -v gum &> /dev/null; then
         GUM_CMD="gum"
         return 0
     fi
 
-    local gum_dir="gum_${GUM_VERSION}_Linux_x86_64"
-    local gum_executable="$HOME/private/${gum_dir}/gum"
-    
-    #  Check for a local installation
-    if [ -f "$gum_executable" ] && "$gum_executable" --version &> /dev/null; then
-        GUM_CMD="$gum_executable"
-        return 0
-    fi
-
-    #  If not found or not working, download it
-    echo "Required tool 'gum' not found. Installing..." >&2
+    # Find the private directory for storing tools
     local private_dir
     if ! private_dir=$(_get_private_dir); then
-        # Error message is handled by the helper function
+        echo "Error: Cannot find a writable directory to install gum." >&2
         return 1
     fi
-    cd "$private_dir" || { echo "Error: Could not enter private directory." >&2; return 1; }
 
-    local gum_tarball="${gum_dir}.tar.gz"
-    if ! wget --quiet "https://github.com/charmbracelet/gum/releases/download/v${GUM_VERSION}/${gum_tarball}" || ! tar -xf "${gum_tarball}"; then
-        echo "Error: Failed to download or extract gum." >&2
-        cd - > /dev/null
-        return 1
+    # Find the executable inside the private directory if it's already installed
+    local existing_executable
+    existing_executable=$(find "$private_dir" -name gum -type f 2>/dev/null | head -n 1)
+    if [ -n "$existing_executable" ] && [ -x "$existing_executable" ] && "$existing_executable" --version &> /dev/null; then
+        GUM_CMD="$existing_executable"
+        return 0
+    fi
+    
+    echo "Required tool 'gum' not found. Installing to '${private_dir}'..." >&2
+    local original_dir; original_dir=$(pwd)
+    cd "$private_dir" || { echo "Error: Could not enter private directory '${private_dir}'." >&2; return 1; }
+
+    local gum_dir_name="gum_${GUM_VERSION}_Linux_x86_64"
+    local gum_tarball="${gum_dir_name}.tar.gz"
+
+    if ! curl -sSL "https://github.com/charmbracelet/gum/releases/download/v${GUM_VERSION}/${gum_tarball}" -o "${gum_tarball}"; then
+        echo "Error: Failed to download gum." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    # Find the path of the 'gum' binary WITHIN the tarball before extracting
+    local gum_path_in_tar
+    gum_path_in_tar=$(tar -tf "${gum_tarball}" | grep '/gum$' | head -n 1)
+
+    if [ -z "$gum_path_in_tar" ]; then
+        echo "Error: Could not find 'gum' executable within the downloaded tarball." >&2
+        rm -f "${gum_tarball}"; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+
+    # Now extract the tarball
+    if ! tar -xf "${gum_tarball}"; then
+        echo "Error: Failed to extract gum from tarball." >&2
+        rm -f "${gum_tarball}"; cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
     rm -f "${gum_tarball}"
 
-    #  Final check
-    if [ -f "$gum_executable" ] && "$gum_executable" --version &> /dev/null; then
+    # The full path to the executable is the private dir + the path from the tarball
+    local gum_executable="${private_dir}/${gum_path_in_tar}"
+
+    if [ -f "$gum_executable" ]; then
+        chmod +x "$gum_executable"
+    else
+        echo "Error: gum executable not found at expected path after extraction: ${gum_executable}" >&2
+        cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+
+    # Final check
+    if [ -x "$gum_executable" ] && "$gum_executable" --version &> /dev/null; then
         echo "'gum' installed successfully." >&2
         GUM_CMD="$gum_executable"
     else
-        echo "Error: gum installation failed." >&2
-        cd - > /dev/null
-        return 1
+        echo "Error: gum installation failed. The binary at ${gum_executable} might not be executable or compatible." >&2
+        cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
-    cd - > /dev/null
+    
+    cd "$original_dir" > /dev/null 2>&1; return 0;
 }
 
 # ----------------------------------------------------
 #  Checks for and installs 'cwebp' if not present. Sets CWEBP_CMD on success.
 # ----------------------------------------------------
 function setup_cwebp() {
-    #  Return if already found
+    # Return if already found
     if [[ -n "$CWEBP_CMD" ]]; then return 0; fi
 
-    #  If cwebp is already in the PATH, we're good to go.
-    if command -v cwebp &> /dev/null; then
-        CWEBP_CMD="cwebp"
-        return 0
+    if command -v cwebp &> /dev/null; then CWEBP_CMD="cwebp"; return 0; fi
+
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        echo "Error: Cannot find a writable directory to install cwebp." >&2; return 1;
+    fi
+
+    local existing_executable
+    existing_executable=$(find "$private_dir" -name cwebp -type f 2>/dev/null | head -n 1)
+    if [ -n "$existing_executable" ] && [ -x "$existing_executable" ] && "$existing_executable" -version &> /dev/null; then
+        CWEBP_CMD="$existing_executable"; return 0;
     fi
     
-    local cwebp_dir="libwebp-${CWEBP_VERSION}-linux-x86-64"
-    local cwebp_executable="$HOME/private/${cwebp_dir}/bin/cwebp"
+    echo "Required tool 'cwebp' not found. Installing to '${private_dir}'..." >&2
+    local original_dir; original_dir=$(pwd)
+    cd "$private_dir" || { echo "Error: Could not enter private directory '${private_dir}'." >&2; return 1; }
 
-    #  Check for a local installation
-    if [ -f "$cwebp_executable" ] && "$cwebp_executable" -version &> /dev/null; then
-        CWEBP_CMD="$cwebp_executable"
-        return 0
+    local cwebp_dir_name="libwebp-${CWEBP_VERSION}-linux-x86-64"
+    local cwebp_tarball="${cwebp_dir_name}.tar.gz"
+
+    if ! curl -sSL "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/${cwebp_tarball}" -o "${cwebp_tarball}"; then
+        echo "Error: Failed to download cwebp." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    local cwebp_path_in_tar
+    cwebp_path_in_tar=$(tar -tf "${cwebp_tarball}" | grep '/bin/cwebp$' | head -n 1)
+    if [ -z "$cwebp_path_in_tar" ]; then
+        echo "Error: Could not find 'cwebp' executable within the downloaded tarball." >&2
+        rm -f "${cwebp_tarball}"; cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
 
-    echo "Required tool 'cwebp' not found. Installing to ~/private..." >&2
-    mkdir -p "$HOME/private"
-    cd "$HOME/private" || { echo "Error: Could not enter ~/private." >&2; return 1; }
-
-    local cwebp_tarball="${cwebp_dir}.tar.gz"
-    if ! wget --quiet "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/${cwebp_tarball}" || ! tar -xzf "${cwebp_tarball}"; then
-        echo "Error: Failed to download or extract cwebp." >&2
-        cd - > /dev/null
-        return 1
+    if ! tar -xzf "${cwebp_tarball}"; then
+        echo "Error: Failed to extract cwebp." >&2; rm -f "${cwebp_tarball}"; cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
     rm -f "${cwebp_tarball}"
 
-    #  Final check
-    if [ -f "$cwebp_executable" ] && "$cwebp_executable" -version &> /dev/null; then
-        echo "'cwebp' installed successfully." >&2
-        CWEBP_CMD="$cwebp_executable"
+    local cwebp_executable="${private_dir}/${cwebp_path_in_tar}"
+    if [ -f "$cwebp_executable" ]; then
+        chmod +x "$cwebp_executable";
     else
-        echo "Error: cwebp installation failed." >&2
-        cd - > /dev/null
-        return 1
+        echo "Error: cwebp executable not found at expected path: ${cwebp_executable}" >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
-    cd - > /dev/null
+
+    if [ -x "$cwebp_executable" ] && "$cwebp_executable" -version &> /dev/null; then
+        echo "'cwebp' installed successfully." >&2; CWEBP_CMD="$cwebp_executable";
+    else
+        echo "Error: cwebp installation failed." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    cd "$original_dir" > /dev/null 2>&1; return 0;
 }
 
 # ----------------------------------------------------
 #  Checks for and installs 'rclone' if not present. Sets RCLONE_CMD on success.
 # ----------------------------------------------------
 function setup_rclone() {
-    #  Return if already found
+    # Return if already found
     if [[ -n "$RCLONE_CMD" ]]; then return 0; fi
 
-    #  If rclone is already in the PATH, we're good to go.
-    if command -v rclone &> /dev/null; then
-        RCLONE_CMD="rclone"
-        return 0
+    if command -v rclone &> /dev/null; then RCLONE_CMD="rclone"; return 0; fi
+    if ! command -v unzip &>/dev/null; then echo "Error: 'unzip' command is required for rclone installation." >&2; return 1; fi
+
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        echo "Error: Cannot find a writable directory to install rclone." >&2; return 1;
+    fi
+    
+    local existing_executable
+    existing_executable=$(find "$private_dir" -name rclone -type f 2>/dev/null | head -n 1)
+    if [ -n "$existing_executable" ] && [ -x "$existing_executable" ] && "$existing_executable" --version &> /dev/null; then
+        RCLONE_CMD="$existing_executable"; return 0;
     fi
 
-    local rclone_dir="rclone-v${RCLONE_VERSION}-linux-amd64"
-    local rclone_executable="$HOME/private/${rclone_dir}/rclone"
-
-    #  Check for a local installation
-    if [ -f "$rclone_executable" ] && "$rclone_executable" --version &> /dev/null; then
-        RCLONE_CMD="$rclone_executable"
-        return 0
-    fi
-
-    #  If not found or not working, download it
-    echo "Required tool 'rclone' not found. Installing to ~/private..." >&2
-    if ! command -v unzip &>/dev/null; then echo "Error: 'unzip' command is required for installation." >&2; return 1; fi
-    mkdir -p "$HOME/private"
-    cd "$HOME/private" || { echo "Error: Could not enter ~/private." >&2; return 1; }
+    echo "Required tool 'rclone' not found. Installing to '${private_dir}'..." >&2
+    local original_dir; original_dir=$(pwd)
+    cd "$private_dir" || { echo "Error: Could not enter private directory '${private_dir}'." >&2; return 1; }
 
     local rclone_zip="rclone-v${RCLONE_VERSION}-linux-amd64.zip"
-    if ! wget --quiet "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/${rclone_zip}" || ! unzip -q "${rclone_zip}"; then
-        echo "Error: Failed to download or extract rclone." >&2
-        cd - > /dev/null
-        return 1
+    if ! curl -sSL "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/${rclone_zip}" -o "${rclone_zip}"; then
+        echo "Error: Failed to download rclone." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    local rclone_path_in_zip
+    rclone_path_in_zip=$(unzip -l "${rclone_zip}" | grep '/rclone$' | awk '{print $4}' | head -n 1)
+    if [ -z "$rclone_path_in_zip" ]; then
+        echo "Error: Could not find 'rclone' executable within the downloaded zip." >&2
+        rm -f "${rclone_zip}"; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+
+    if ! unzip -q -o "${rclone_zip}"; then
+        echo "Error: Failed to extract rclone." >&2; rm -f "${rclone_zip}"; cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
     rm -f "${rclone_zip}"
-
-    #  Final check
-    if [ -f "$rclone_executable" ] && "$rclone_executable" --version &> /dev/null; then
-        echo "'rclone' installed successfully." >&2
-        RCLONE_CMD="$rclone_executable"
+    
+    local rclone_executable="${private_dir}/${rclone_path_in_zip}"
+    if [ -f "$rclone_executable" ]; then
+        chmod +x "$rclone_executable";
     else
-        echo "Error: rclone installation failed." >&2
-        cd - > /dev/null
-        return 1
+        echo "Error: rclone executable not found at expected path: ${rclone_executable}" >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
-    cd - > /dev/null
+    
+    if [ -x "$rclone_executable" ] && "$rclone_executable" --version &> /dev/null; then
+        echo "'rclone' installed successfully." >&2; RCLONE_CMD="$rclone_executable";
+    else
+        echo "Error: rclone installation failed." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    cd "$original_dir" > /dev/null 2>&1; return 0;
 }
 
 # ----------------------------------------------------
