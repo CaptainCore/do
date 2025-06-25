@@ -566,6 +566,77 @@ function setup_wp_cli() {
 }
 
 # ----------------------------------------------------
+#  (Helper) Uses PHP to check if a file is a WebP image.
+# ----------------------------------------------------
+function _is_webp_php() {
+    local file_path="$1"
+    if [ -z "$file_path" ]; then
+        return 1 # Return false if no file path is provided
+    fi
+
+    # IMAGETYPE_WEBP has a constant value of 18 in PHP.
+    # We will embed the file_path directly into the PHP string.
+    local php_code="
+    \$file_to_check = '${file_path}';
+    if (!file_exists(\$file_to_check)) {
+        // Silently exit if file doesn't exist, to avoid warnings.
+        exit(1);
+    }
+    if (function_exists('exif_imagetype')) {
+        // The @ suppresses warnings for unsupported file types.
+        \$image_type = @exif_imagetype(\$file_to_check);
+        if (\$image_type === 18) { // 18 is the constant for IMAGETYPE_WEBP
+            exit(0); // Exit with success code (true)
+        }
+    }
+    exit(1); // Exit with failure code (false)
+    "
+    
+    if ! setup_wp_cli; then
+      if command -v php &> /dev/null; then
+        php -r "\$file_path='${file_path}'; ${php_code}"
+        return $?
+      fi
+      return 1
+    fi
+
+    # Execute 'wp eval' with the self-contained code. No extra arguments are needed.
+    "$WP_CLI_CMD" eval "$php_code"
+    return $?
+}
+
+# ----------------------------------------------------
+#  (Primary Checker) Checks if a file is WebP, using identify or PHP fallback.
+# ----------------------------------------------------
+function _is_webp() {
+    # Determine which method to use, but only do it once.
+    if [[ -z "$IDENTIFY_METHOD" ]]; then
+        if command -v identify &> /dev/null; then
+            echo "Using 'identify' command for image type checking." >&2
+            IDENTIFY_METHOD="identify"
+        else
+            echo "Warning: 'identify' command not found. Falling back to PHP check." >&2
+            IDENTIFY_METHOD="php"
+        fi
+    fi
+
+    # Execute the chosen method
+    if [[ "$IDENTIFY_METHOD" == "identify" ]]; then
+        if [[ "$(identify -format "%m" "$1")" == "WEBP" ]]; then
+            return 0 # It is a WebP file
+        else
+            return 1 # It is not a WebP file
+        fi
+    else # Fallback to PHP
+        if _is_webp_php "$1"; then
+            return 0 # It is a WebP file
+        else
+            return 1 # It is not a WebP file
+        fi
+    fi
+}
+
+# ----------------------------------------------------
 #  Displays detailed help for a specific command.
 # ----------------------------------------------------
 function show_command_help() {

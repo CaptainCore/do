@@ -4,58 +4,69 @@
 function convert_to_webp() {
     local all_files_flag="$1"
     echo "🚀 Starting WebP Conversion Process 🚀"
+
     if ! setup_cwebp; then 
-        echo "Aborting conversion: cwebp setup failed." 
+        echo "Aborting conversion: cwebp setup failed." >&2 
         return 1
     fi
-    if ! setup_imagemagick; then
-        echo "Aborting conversion: ImageMagick (identify) setup failed." >&2
-        return 1
-    fi
-    local uploads_dir="wp-content/uploads"; if [ ! -d "$uploads_dir" ]; then echo "❌ Error: Cannot find '$uploads_dir' directory." >&2; return 1; fi 
-    local before_size; before_size="$(du -sh "$uploads_dir" | awk '{print $1}')"; 
-    echo "Current uploads size: $before_size"
+
+    local uploads_dir="wp-content/uploads"
+    if [ ! -d "$uploads_dir" ]; then
+        echo "❌ Error: Cannot find '$uploads_dir' directory." >&2; return 1; 
+    fi 
+
+    local before_size;
+    before_size="$(du -sh "$uploads_dir" | awk '{print $1}')";
+    echo "Current uploads size: $before_size" 
+
     local size_limit_mb=1
     local message="larger than ${size_limit_mb}MB"
     local find_args=("$uploads_dir" -type f)
     if [[ "$all_files_flag" != "true" ]]; then
-        find_args+=(-size "+${size_limit_mb}M")
+        find_args+=(-size "+${size_limit_mb}M") 
     else
         message="of all sizes"
     fi
-    find_args+=(\( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" \))
+    find_args+=(\( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \))
 
     local files;
-    files=$(find "${find_args[@]}")
+    files=$(find "${find_args[@]}") 
 
     if [[ -z "$files" ]]; then
-        echo "✅ No images ${message} found to convert.";
+        echo "✅ No images ${message} found to convert."; 
         return 0;
     fi
     local count;
     count=$(echo "$files" | wc -l);
-    echo "Found $count image(s) ${message} to process...";
+    echo "Found $count image(s) ${message} to process..."; 
     echo "" 
-    echo "$files" | while IFS= read -r file; do 
-        if [[ "$($IDENTIFY_CMD -format "%m" "$file")" == "WEBP" ]]; then
+
+    # This loop now calls the new universal helper function
+    echo "$files" | while IFS= read -r file; do
+        if _is_webp "$file"; then 
             echo "Skipping (already WebP): $file"; continue;
         fi
-        local temp_file="${file}.temp.webp"; local before_file_size; 
+
+        local temp_file="${file}.temp.webp";
+        local before_file_size;
         before_file_size=$(ls -lh "$file" | awk '{print $5}')
+
         "$CWEBP_CMD" -q 80 "$file" -o "$temp_file" > /dev/null 2>&1 
-        if [ -s "$temp_file" ]; then 
-            mv "$temp_file" "$file"; local after_file_size; 
+        if [ -s "$temp_file" ]; then
+            mv "$temp_file" "$file";
+            local after_file_size;
             after_file_size=$(ls -lh "$file" | awk '{print $5}')
-            echo "✅ Converted ($before_file_size -> $after_file_size): $file"
+            echo "✅ Converted ($before_file_size -> $after_file_size): $file" 
         else
-            rm -f "$temp_file"; 
+            rm -f "$temp_file";
             echo "❌ Failed conversion: $file" 
         fi
     done
-    echo ""; 
+
+    echo "";
     local after_size; after_size="$(du -sh "$uploads_dir" | awk '{print $1}')" 
-    echo "✅ Bulk conversion complete!"; 
-    echo "-----------------------------------------------------"; 
+    echo "✅ Bulk conversion complete!";
+    echo "-----------------------------------------------------";
     echo "   Uploads folder size reduced from $before_size to $after_size."; 
-    echo "-----------------------------------------------------" 
+    echo "-----------------------------------------------------"
 }
