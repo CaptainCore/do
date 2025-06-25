@@ -539,16 +539,24 @@ function show_command_help() {
             echo "Usage: _do upgrade"
             ;;
         vault)
-            echo "Creates a secure, full site snapshot in a remote Restic repository."
+            echo "Manages secure, full site snapshots in a remote Restic repository."
             echo
-            echo "Usage: cat secrets.txt | _do vault"
+            echo "Usage: _do vault <subcommand>"
             echo
-            echo "Reads secrets from stdin. The 'secrets.txt' file must contain 5 lines in order:"
-            echo "  1. B2 Bucket Name"
-            echo "  2. Path within Bucket (e.g., 'production/site-slug')"
-            echo "  3. B2 Key ID"
-            echo "  4. B2 Application Key"
-            echo "  5. Restic Repository Password"
+            echo "Subcommands:"
+            echo "  create         Creates a new snapshot of the current site."
+            echo "  snapshots      Lists available snapshots."
+            echo "  mount          Mounts the entire repository to a local folder for browsing."
+            echo "  info           Displays statistics about the repository."
+            echo "  prune          Removes unnecessary data from the repository."
+            echo
+            echo "Authentication:"
+            echo "  This command requires B2 and Restic credentials, provided either by"
+            echo "  environment variables (B2_ACCOUNT_ID, B2_ACCOUNT_KEY, RESTIC_PASSWORD,"
+            echo "  B2_BUCKET, B2_PATH) or by piping a 5-line secrets file via stdin."
+            echo
+            echo "Example (stdin):"
+            echo "  cat secrets.txt | _do vault snapshots"
             ;;
         version)
             echo "Displays the current version of the _do script."
@@ -601,7 +609,7 @@ function show_usage() {
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
     echo "  update              Runs WordPress updates and logs the changes."
     echo "  upgrade             Upgrades this script to the latest version."
-    echo "  vault               Creates a secure, full site snapshot in a remote Restic repo."
+    echo "  vault               Manages secure snapshots in a remote Restic repository."
     echo "  version             Displays the current version of the _do script."
     echo "  wpcli               Checks for and identifies sources of WP-CLI warnings."
     echo ""
@@ -952,7 +960,28 @@ function main() {
             run_upgrade
             ;;
         vault)
-            run_vault
+            local subcommand="${positional_args[1]}" # Default to snapshots
+            case "$subcommand" in
+                create)
+                    vault_create
+                    ;;
+                snapshots)
+                    vault_snapshots
+                    ;;
+                mount)
+                    vault_mount
+                    ;;
+                info)
+                    vault_info
+                    ;;
+                prune)
+                    vault_prune
+                    ;;
+                *)
+                    show_command_help "vault" >&2
+                    exit 0
+                    ;;
+            esac
             ;;
         version|--version|-v)
             show_version
