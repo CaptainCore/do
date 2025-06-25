@@ -370,7 +370,9 @@ function setup_restic() {
 # ----------------------------------------------------
 function setup_git() {
     #  Return if already found
-    if [[ -n "$GIT_CMD" ]]; then return 0; fi
+    if [[ -n "$GIT_CMD" ]]; then
+        return 0
+    fi
 
     #  If git is already in the PATH, we're good to go.
     if command -v git &> /dev/null; then
@@ -378,11 +380,77 @@ function setup_git() {
         return 0
     fi
 
-    # Since git is a more complex dependency, we'll just check for it
-    # and error out if it's not installed. A proper sideload for git
-    # is significantly more involved than for the other tools.
-    echo "❌ Error: 'git' command not found. Please install Git to use checkpoint features." >&2
-    return 1
+    # --- Sideloading Logic ---
+    echo "Required tool 'git' not found. Attempting to sideload..." >&2
+    
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        return 1
+    fi
+    
+    local git_executable="${private_dir}/git/usr/bin/git"
+
+    # Check if git has already been sideloaded
+    if [ -f "$git_executable" ] && "$git_executable" --version &> /dev/null; then
+        echo "'git' found in private directory." >&2
+        GIT_CMD="$git_executable"
+        return 0
+    fi
+
+    # Check for wget and dpkg-deb, which are required for sideloading
+    if ! command -v wget &> /dev/null || ! command -v dpkg-deb &> /dev/null; then
+        echo "❌ Error: 'wget' and 'dpkg-deb' are required to sideload git." >&2
+        return 1
+    fi
+
+    # Determine OS distribution and version
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+    else
+        echo "❌ Error: Cannot determine OS distribution. /etc/os-release not found." >&2
+        return 1
+    fi
+
+    if [[ "$ID" != "ubuntu" ]]; then
+        echo "❌ Error: Sideloading git is currently only supported on Ubuntu." >&2
+        return 1
+    fi
+
+    # Construct the download URL for the git package
+    # This example uses a recent stable version. You may need to update the version number periodically.
+    local git_version="2.47.1-0ppa1~ubuntu16.04.1"
+    local git_deb_url="https://launchpad.net/~git-core/+archive/ubuntu/candidate/+build/29298725/+files/git_${git_version}_amd64.deb"
+    local git_deb_file="${private_dir}/git_latest.deb"
+
+    echo "Downloading git from ${git_deb_url}..." >&2
+    if ! wget -q -O "$git_deb_file" "$git_deb_url"; then
+        echo "❌ Error: Failed to download git .deb package." >&2
+        rm -f "$git_deb_file"
+        return 1
+    fi
+
+    echo "Extracting git package..." >&2
+    local extract_dir="${private_dir}/git"
+    mkdir -p "$extract_dir"
+    if ! dpkg-deb -x "$git_deb_file" "$extract_dir"; then
+        echo "❌ Error: Failed to extract git .deb package." >&2
+        rm -rf "$extract_dir"
+        rm -f "$git_deb_file"
+        return 1
+    fi
+
+    # Clean up the downloaded .deb file
+    rm -f "$git_deb_file"
+
+    # Final check
+    if [ -f "$git_executable" ] && "$git_executable" --version &> /dev/null; then
+        echo "'git' sideloaded successfully." >&2
+        GIT_CMD="$git_executable"
+        return 0
+    else
+        echo "❌ Error: git sideloading failed. The git binary is not available after extraction." >&2
+        return 1
+    fi
 }
 
 # ----------------------------------------------------
