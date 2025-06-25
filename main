@@ -31,30 +31,41 @@ function _get_private_dir() {
         return 0
     fi
 
-    # --- Tier 1: Preferred WP-CLI Method ---
-    if setup_wp_cli; then
+    local wp_root=""
+    local parent_dir=""
+
+    # --- Tier 1: Preferred WP-CLI Method (if in a WP directory) ---
+    # Check if wp-cli is set up and if we are in a WP installation.
+    if setup_wp_cli && "$WP_CLI_CMD" core is-installed --quiet 2>/dev/null; then
         local wp_config_path
         wp_config_path=$("$WP_CLI_CMD" config path --quiet 2>/dev/null)
         if [ -n "$wp_config_path" ] && [ -f "$wp_config_path" ]; then
-            local wp_root
             wp_root=$(dirname "$wp_config_path")
-            local parent_dir
             parent_dir=$(dirname "$wp_root")
 
-            # Check for WP Engine's private directory first
+            # --- WPE Specific Checks ---
+            # A. Check for _wpeprivate inside the WP root directory first (most common).
+            if [ -d "${wp_root}/_wpeprivate" ]; then
+                CAPTAINCORE_PRIVATE_DIR="${wp_root}/_wpeprivate"
+                echo "$CAPTAINCORE_PRIVATE_DIR"
+                return 0
+            fi
+            # B. Check for _wpeprivate in the parent directory.
             if [ -d "${parent_dir}/_wpeprivate" ]; then
                 CAPTAINCORE_PRIVATE_DIR="${parent_dir}/_wpeprivate"
                 echo "$CAPTAINCORE_PRIVATE_DIR"
                 return 0
             fi
+
+            # --- Standard Checks (relative to WP root's parent) ---
             # Check for a standard ../private directory
             if [ -d "${parent_dir}/private" ]; then
                 CAPTAINCORE_PRIVATE_DIR="${parent_dir}/private"
                 echo "$CAPTAINCORE_PRIVATE_DIR"
                 return 0
             fi
-            # Try to create a ../private directory
-            if mkdir -p "${parent_dir}/private"; then
+            # Try to create a ../private directory, suppressing errors
+            if mkdir -p "${parent_dir}/private" 2>/dev/null; then
                 CAPTAINCORE_PRIVATE_DIR="${parent_dir}/private"
                 echo "$CAPTAINCORE_PRIVATE_DIR"
                 return 0
@@ -71,35 +82,40 @@ function _get_private_dir() {
     # --- Tier 2: Manual Fallback (if WP-CLI fails or not in a WP install) ---
     local current_dir
     current_dir=$(pwd)
-    if [ -d "${current_dir}/_wpeprivate" ]; then # WPE check
+    # WPE check in current directory
+    if [ -d "${current_dir}/_wpeprivate" ]; then
         CAPTAINCORE_PRIVATE_DIR="${current_dir}/_wpeprivate"
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
-    if [ -d "../private" ]; then # Relative private check
+    # Relative private check
+    if [ -d "../private" ]; then
         CAPTAINCORE_PRIVATE_DIR=$(cd ../private && pwd)
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
-    if mkdir -p "../private"; then # Attempt to create relative private
+    # Attempt to create relative private, suppressing errors
+    if mkdir -p "../private" 2>/dev/null; then
         CAPTAINCORE_PRIVATE_DIR=$(cd ../private && pwd)
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
-    if [ -d "../tmp" ]; then # Relative tmp check
+    # Relative tmp check
+    if [ -d "../tmp" ]; then
         CAPTAINCORE_PRIVATE_DIR=$(cd ../tmp && pwd)
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
 
     # --- Tier 3: Last Resort Fallback to Home Directory ---
-    if mkdir -p "$HOME/private"; then # Home directory check
+    # Suppress errors in case $HOME is not writable
+    if mkdir -p "$HOME/private" 2>/dev/null; then
         CAPTAINCORE_PRIVATE_DIR="$HOME/private"
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
 
-    echo "Error: Could not find or create a suitable private directory." >&2
+    echo "Error: Could not find or create a suitable private, writable directory." >&2
     return 1
 }
 
