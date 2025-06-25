@@ -5,10 +5,13 @@ function convert_to_webp() {
     local all_files_flag="$1"
     echo "🚀 Starting WebP Conversion Process 🚀"
     if ! setup_cwebp; then 
-        echo "Aborting conversion: cwebp setup failed." >&2 
+        echo "Aborting conversion: cwebp setup failed." 
         return 1
     fi
-    if ! command -v identify &> /dev/null; then echo "❌ Error: 'identify' command not found. Please install ImageMagick." >&2; return 1; fi 
+    if ! setup_imagemagick; then
+        echo "Aborting conversion: ImageMagick (identify) setup failed." >&2
+        return 1
+    fi
     local uploads_dir="wp-content/uploads"; if [ ! -d "$uploads_dir" ]; then echo "❌ Error: Cannot find '$uploads_dir' directory." >&2; return 1; fi 
     local before_size; before_size="$(du -sh "$uploads_dir" | awk '{print $1}')"; 
     echo "Current uploads size: $before_size"
@@ -34,8 +37,8 @@ function convert_to_webp() {
     echo "Found $count image(s) ${message} to process...";
     echo "" 
     echo "$files" | while IFS= read -r file; do 
-        if [[ "$(identify -format "%m" "$file")" == "WEBP" ]]; then 
-            echo "Skipping (already WebP): $file"; continue; 
+        if [[ "$($IDENTIFY_CMD -format "%m" "$file")" == "WEBP" ]]; then
+            echo "Skipping (already WebP): $file"; continue;
         fi
         local temp_file="${file}.temp.webp"; local before_file_size; 
         before_file_size=$(ls -lh "$file" | awk '{print $5}')

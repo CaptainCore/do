@@ -15,6 +15,7 @@ RCLONE_VERSION="1.69.3"
 GIT_VERSION="2.50.0"
 GUM_CMD=""
 CWEBP_CMD=""
+IDENTIFY_CMD=""
 WP_CLI_CMD=""
 RESTIC_CMD=""
 
@@ -253,6 +254,86 @@ function setup_cwebp() {
     fi
     
     cd "$original_dir" > /dev/null 2>&1; return 0;
+}
+
+# ----------------------------------------------------
+#  Checks for and installs ImageMagick if not present. Sets IDENTIFY_CMD on success.
+# ----------------------------------------------------
+function setup_imagemagick() {
+    # Return if already found
+    if [[ -n "$IDENTIFY_CMD" ]]; then
+        return 0
+    fi
+
+    # If identify is already in the PATH, we're good to go.
+    if command -v identify &> /dev/null; then
+        IDENTIFY_CMD="identify"
+        return 0
+    fi
+
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        # Error message is handled by the helper function
+        return 1
+    fi
+
+    # Define the path where the extracted binary should be
+    local identify_executable="${private_dir}/squashfs-root/usr/bin/identify"
+    
+    # Check if we have already extracted it
+    if [ -f "$identify_executable" ] && "$identify_executable" -version &> /dev/null; then
+        IDENTIFY_CMD="$identify_executable"
+        return 0
+    fi
+
+    # If not found, download and extract the AppImage
+    echo "Required tool 'identify' not found. Sideloading via AppImage extraction..." >&2
+
+    local imagemagick_appimage_path="${private_dir}/ImageMagick.AppImage"
+    
+    # Let's use the 'gcc' version as it's a common compiler toolchain for Linux
+    local appimage_url="https://github.com/ImageMagick/ImageMagick/releases/download/7.1.1-47/ImageMagick-82572af-gcc-x86_64.AppImage"
+    
+    echo "Downloading from ${appimage_url}..." >&2
+    if ! wget --quiet "$appimage_url" -O "$imagemagick_appimage_path"; then
+        echo "Error: Failed to download the ImageMagick AppImage." >&2
+        rm -f "$imagemagick_appimage_path" # Clean up partial download
+        return 1
+    fi
+    
+    chmod +x "$imagemagick_appimage_path"
+
+    # --- EXTRACTION STEP ---
+    # This is the key change to work around the FUSE error.
+    echo "Extracting AppImage..." >&2
+    
+    # Change into the private directory to contain the extraction
+    cd "$private_dir" || { echo "Error: Could not enter private directory." >&2; return 1; }
+    
+    # Run the extraction. This creates a 'squashfs-root' directory.
+    if ! ./ImageMagick.AppImage --appimage-extract >/dev/null; then
+        echo "Error: Failed to extract the ImageMagick AppImage." >&2
+        # Clean up on failure
+        rm -f "ImageMagick.AppImage"
+        rm -rf "squashfs-root"
+        cd - > /dev/null
+        return 1
+    fi
+
+    # We don't need the AppImage file anymore after extraction
+    rm -f "ImageMagick.AppImage"
+    
+    # Return to the original directory
+    cd - > /dev/null
+
+    # Final check
+    if [ -f "$identify_executable" ] && "$identify_executable" -version &> /dev/null; then
+        echo "'identify' binary extracted successfully to ${private_dir}/squashfs-root/" >&2
+        IDENTIFY_CMD="$identify_executable"
+    else
+        echo "Error: ImageMagick extraction failed. Could not find the 'identify' executable." >&2
+        return 1
+    fi
 }
 
 # ----------------------------------------------------
