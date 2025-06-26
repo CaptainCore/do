@@ -1,94 +1,84 @@
 # ----------------------------------------------------
-#  Performs a full site backup to a Restic repository on B2. 
-#  Credentials can be injected via environment variables or piped via stdin. 
+#  Performs a full site backup to a Restic repository on B2.
+#  Credentials can be injected via environment variables or piped via stdin.
 # ----------------------------------------------------
 function vault_create() {
     echo "🚀 Starting secure snapshot to Restic B2 repository..."
- 
+
     # --- Pre-flight Checks ---
-    if ! setup_restic; then return 1; fi 
-    if ! setup_wp_cli; then return 1; fi 
-    if ! command -v zip &>/dev/null; then echo "❌ Error: The 'zip' command is required for this operation." >&2; return 1; fi 
-    if ! "$WP_CLI_CMD" core is-installed --quiet; 
-    then
-        echo "❌ Error: This does not appear to be a WordPress installation." 
-        >&2 
+    if ! setup_restic; then
         return 1
     fi
- 
+    if ! setup_wp_cli; then
+        return 1
+    fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then
+        echo "❌ Error: This does not appear to be a WordPress installation." >&2
+        return 1
+    fi
+
     # --- Setup Restic Environment ---
-    if ! _setup_vault_env; then 
+    if ! _setup_vault_env; then
         return 1 # Error message printed in helper
     fi
- 
+
     # --- Check/Initialize Restic Repository ---
     echo "   - Checking for repository at ${RESTIC_REPOSITORY}..."
-    if ! "$RESTIC_CMD" stats >/dev/null 2>&1; then 
+    if ! "$RESTIC_CMD" stats > /dev/null 2>&1; then
         echo "   - Repository not found or is invalid. Attempting to initialize..."
-        if ! "$RESTIC_CMD" init; then 
-            echo "❌ Error: Failed to initialize Restic repository." 
-            >&2 
+        if ! "$RESTIC_CMD" init; then
+            echo "❌ Error: Failed to initialize Restic repository." >&2
             return 1
         fi
-        echo "   - ✅ Repository initialized successfully." 
+        echo "   - ✅ Repository initialized successfully."
     else
-        echo "   - ✅ Repository found." 
+        echo "   - ✅ Repository found."
     fi
- 
+
     # --- Create Local DB Dump ---
-    local wp_root_dir; 
-    wp_root_dir=$(realpath ".") 
-    local site_slug; site_slug=$(basename "$wp_root_dir") 
-    local random_token; 
-    random_token=$(head /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | head -c 7) 
-    local db_filename_base="${site_slug}-db-dump-${random_token}" 
-    local sql_file_path="/tmp/${db_filename_base}.sql" 
-    local zip_file_path="${wp_root_dir}/${db_filename_base}.zip" 
+    local wp_root_dir
+    wp_root_dir=$(realpath ".")
+    local random_token
+    random_token=$(head /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | head -c 3)
+    timestamp=$(date +"%Y-%m-%d-%H%M%S")
+    local db_filename_base="database-${timestamp}_${random_token}"
+    local sql_file_path="${wp_root_dir}/${db_filename_base}.sql"
 
     echo "   - Generating temporary database dump: $(basename "$sql_file_path")"
-    if ! "$WP_CLI_CMD" db export "$sql_file_path" --add-drop-table > /dev/null; then 
-        echo "❌ Error: Database export failed." 
-        >&2 
+    # Add flags to handle large tables and prevent timeouts, mirroring the db_backup command.
+    if ! "$WP_CLI_CMD" db export "$sql_file_path" --add-drop-table --single-transaction --quick --max_allowed_packet=512M > /dev/null; then
+        echo "❌ Error: Database export failed."
+        rm -f "$sql_file_path"
         return 1
     fi
- 
-    echo "   - Compressing database dump to zip format..."
-    if ! zip -q -j "$zip_file_path" "$sql_file_path"; then 
-        echo "❌ Error: Failed to zip the database dump." 
-        >&2 
-        rm -f "$sql_file_path" 
-        return 1
-    fi
-    
-    rm -f "$sql_file_path" 
 
     # --- Run Restic Backup ---
-    local original_dir; 
-    original_dir=$(pwd) 
+    local original_dir
+    original_dir=$(pwd)
     echo "   - Changing to WordPress root ($wp_root_dir) for clean snapshot paths..."
-    cd "$wp_root_dir" || 
-    { echo "❌ Error: Could not change to WordPress root directory."; rm -f "$zip_file_path"; return 1; 
+    cd "$wp_root_dir" || {
+        echo "❌ Error: Could not change to WordPress root directory."
+        rm -f "$sql_file_path"
+        return 1
     }
 
-    echo "   - Backing up current directory (.), which now includes the zipped database dump..."
-    if ! "$RESTIC_CMD" backup --verbose --tag "$site_slug" --tag "wordpress" "."; 
-    then
-        echo "❌ Error: Restic backup command failed." 
-        >&2 
-        rm -f "$zip_file_path" 
-        cd "$original_dir" 
+    echo "   - Backing up current directory (.), which now includes the SQL database dump..."
+    if ! "$RESTIC_CMD" backup --verbose "."; then
+        echo "❌ Error: Restic backup command failed." >&2
+        rm -f "$sql_file_path"
+        cd "$original_dir"
         return 1
     fi
-    
+
     # --- Cleanup ---
-    cd "$original_dir" 
+    cd "$original_dir"
     echo "   - Cleaning up temporary database dump..."
-    rm -f "$zip_file_path" 
+    rm -f "$sql_file_path"
 
     # Unset variables for security
     unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
 
-    echo "✅ Vault snapshot complete!" 
+    echo "✅ Vault snapshot complete!"
 }
 
 # ----------------------------------------------------
