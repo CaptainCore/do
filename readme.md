@@ -38,15 +38,14 @@ These tools will be downloaded and installed into a `~/private` directory in you
 The easiest way to use CaptainCore `_do` is by defining an alias to [captaincore.io/do](https://captaincore.io/do).
 
 ```bash
-alias _do='curl -sL https://captaincore.io/do | bash -s'
+alias _do='bash <(curl -sL https://captaincore.io/do)'
 ```
 
  That allows you to use `_do` without installing anything. The alias will last for the duration of your terminal session. Want to make it persistent? Then add the alias to your `~/.bash_aliases` file or `~/.zshrc` if you use ZSH.
 
 SSH in non-interactive mode doesn't support aliases. For that we can use the following method.
 ```bash
-ssh username@ip-address -p 22 "_do() { curl -sL https://captaincore.io/do | bash -s -- \"\$@\"; }; \
-_do help version"
+ssh username@ip-address -p 22 "bash <(curl -sL https://captaincore.io/do) help version"
 ```
 
 Response would be:
