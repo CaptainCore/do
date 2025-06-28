@@ -352,8 +352,13 @@ echo "💾 Download this directory ({$current_path})|download_dir|.\n";
             data_items+=("${type_part}|${name_part}")
         done <<< "$formatted_list"
 
-        local selected_display
-        selected_display=$(printf "%s\n" "${display_items[@]}" | "$GUM_CMD" filter --height=20 --prompt="👇 Select an item" --indicator="→" --placeholder="")
+         local selected_display
+        # Use a for loop to pipe items to gum filter, avoiding argument list limits.
+        selected_display=$(
+            for item in "${display_items[@]}"; do
+                echo "$item"
+            done | "$GUM_CMD" filter --height=20 --prompt="👇 Select a snapshot to browse" --indicator="→" --placeholder=""
+        )
 
         if [ -z "$selected_display" ];
         then
@@ -455,8 +460,9 @@ function vault_snapshots() {
     }
 EOF
 
+    # Pipe the JSON data into the PHP script to avoid argument length limits.
     total_count=$("$GUM_CMD" spin --spinner dot --title "Counting total snapshots..." -- \
-        bash -c 'printf "%s" "$1" | php -r "$2"' _ "$snapshots_json" "$php_script"
+        bash -c 'php -r "$1"' _ "$php_script" <<< "$snapshots_json"
     )
 
     echo "🔎 Fetching ${total_count} snapshots..."
