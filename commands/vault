@@ -79,6 +79,7 @@ function vault_create() {
         --exclude 'phperror_log' \
         --exclude 'wp-content/updraft' \
         --exclude 'wp-content/cache' \
+        --exclude 'wp-content/uploads/sessions' \
         --exclude 'wp-content/uploads_from_s3' \
         --exclude 'wp-snapshots'; then
         echo "❌ Error: Restic backup command failed." >&2
