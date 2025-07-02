@@ -1,0 +1,49 @@
+# ----------------------------------------------------
+#  Detects plugins that are active but hidden from the standard plugin list.
+# ----------------------------------------------------
+function hidden_plugins() {
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+
+    echo "🚀 Checking for hidden WordPress plugins..."
+
+    # Get the standard list of active plugins
+    local active_plugins
+    active_plugins=$("$WP_CLI_CMD" plugin list --field=name --status=active)
+
+    # Get the "raw" list of active plugins by skipping themes and other plugins
+    local active_plugins_raw
+    active_plugins_raw=$("$WP_CLI_CMD" plugin list --field=name --status=active --skip-themes --skip-plugins)
+
+    local regular_count
+    regular_count=$(echo "$active_plugins" | wc -l | xargs)
+    local raw_count
+    raw_count=$(echo "$active_plugins_raw" | wc -l | xargs)
+
+    # Compare the counts of the two lists.
+    if [[ "$regular_count" == "$raw_count" ]]; then
+        echo "✅ No hidden plugins detected. The standard and raw plugin lists match ($regular_count plugins)."
+        return 0
+    fi
+
+    # If the counts differ, find the plugins that are in the raw list but not the standard one.
+    echo "⚠️ Found a discrepancy between plugin lists!"
+    echo "   - Standard list shows: $regular_count active plugins."
+    echo "   - Raw list shows: $raw_count active plugins."
+    echo
+
+    # Use 'comm' to find lines unique to the raw list.
+    local hidden_plugins
+    hidden_plugins=$(comm -13 <(echo "$active_plugins" | sort) <(echo "$active_plugins_raw" | sort))
+
+    if [ -z "$hidden_plugins" ]; then
+        echo "ℹ️  Could not isolate the specific hidden plugins, but a discrepancy exists."
+    else
+        echo "--- Found Hidden Plugins ---"
+        echo "$hidden_plugins"
+        echo "--------------------------"
+        echo "💡 These plugins are active but may be hidden from the admin view or standard WP-CLI list."
+        echo "   Common offenders are management plugins (like ManageWP's 'worker') or potentially malicious code."
+    fi
+}
