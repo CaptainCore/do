@@ -5,6 +5,7 @@ function hidden_plugins() {
     # --- Pre-flight Checks ---
     if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
     if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then return 1; fi
 
     echo "🚀 Checking for hidden WordPress plugins..."
 
@@ -40,9 +41,19 @@ function hidden_plugins() {
     if [ -z "$hidden_plugins" ]; then
         echo "ℹ️  Could not isolate the specific hidden plugins, but a discrepancy exists."
     else
-        echo "--- Found Hidden Plugins ---"
-        echo "$hidden_plugins"
-        echo "--------------------------"
+        echo "--- Found Hidden Plugin(s) ---"
+        # Loop through each hidden plugin and get its details
+        while IFS= read -r plugin; do
+            if [ -z "$plugin" ]; then continue; fi
+
+            "$GUM_CMD" log --level warn "Details for: $plugin"
+            
+            # Get plugin details in CSV format and pipe to gum for a clean table printout.
+            "$WP_CLI_CMD" plugin get "$plugin" --skip-plugins --skip-themes --format=csv | \
+                "$GUM_CMD" table --separator "," --widths=15,0 --print
+            
+            echo
+        done <<< "$hidden_plugins"
         echo "💡 These plugins are active but may be hidden from the admin view or standard WP-CLI list."
         echo "   Common offenders are management plugins (like ManageWP's 'worker') or potentially malicious code."
     fi
