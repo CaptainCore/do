@@ -722,6 +722,14 @@ function show_command_help() {
             echo "  _do dump \"wp-content/plugins/my-plugin/**/*.php\""
             echo "  _do dump \"*\" -x \"*.log\" -x \"node_modules/\""
             ;;
+        find)
+            echo "Finds files based on specific criteria."
+            echo
+            echo "Usage: _do find <subcommand> [arguments]"
+            echo
+            echo "Subcommands:"
+            echo "  recent-files [days]  Finds files modified within the last <days>. Defaults to 1 day."
+            ;;
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
             echo
@@ -892,6 +900,7 @@ function show_usage() {
     echo "  cron                Manages cron jobs and schedules tasks to run at specific times."
     echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
+    echo "  find                Finds files based on specific criteria."
     echo "  hidden-plugins      Detects plugins that are active but hidden from the standard list."
     echo "  install             Installs helper plugins or premium plugins."
     echo "  migrate             Migrates a site from a backup URL or local file."
@@ -1152,6 +1161,18 @@ function main() {
                 return 1
             fi
             run_dump "${positional_args[1]}" "${exclude_patterns[@]}"
+            ;;
+        find)
+            local subcommand="${positional_args[1]}"
+            case "$subcommand" in
+                recent-files)
+                    find_recent_files "${positional_args[2]}"
+                    ;;
+                *)
+                    show_command_help "find"
+                    exit 0
+                    ;;
+            esac
             ;;
         hidden-plugins)
             hidden_plugins

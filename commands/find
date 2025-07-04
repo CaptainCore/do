@@ -1,0 +1,33 @@
+# ----------------------------------------------------
+#  Finds files that have been recently modified.
+# ----------------------------------------------------
+function find_recent_files() {
+    local days="${1:-1}" # Default to 1 day if no argument is provided
+
+    # Validate that the input is a number
+    if ! [[ "$days" =~ ^[0-9]+$ ]]; then
+        echo "❌ Error: Please provide a valid number of days." >&2
+        echo "Usage: _do find recent-files <days>" >&2
+        return 1
+    fi
+
+    echo "🔎 Searching for files modified in the last $days day(s)..."
+    echo
+
+    # Check the operating system to use the correct `find` command syntax.
+    # The `-printf` option is not available on macOS/BSD `find`.
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # On macOS, use -exec with `stat` for formatted, sortable output.
+        # -f "%Sm %N" formats the output: Modification time, then file name.
+        # -t "%Y-%m-%d %H:%M:%S" specifies the timestamp format for sorting.
+        find . -type f -mtime "-${days}" -exec stat -f "%Sm %N" -t "%Y-%m-%d %H:%M:%S" {} + | sort -r
+    else
+        # On Linux, the more efficient -printf option is available.
+        find . -type f -mtime "-${days}" -printf "%TY-%Tm-%Td %TH:%M:%S %p\n" | sort -r
+    fi
+
+    if [ $? -ne 0 ]; then
+        echo "❌ Error: The 'find' command failed to execute." >&2
+        return 1
+    fi
+}
