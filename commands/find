@@ -61,7 +61,6 @@ function find_slow_plugins() {
 
     echo "📊 Measuring impact of individual plugins (compared to '${base_time_s}' base time):"
     echo "A larger positive 'Impact' suggests the plugin contributes more to the load time of this specific WP-CLI command."
-
     echo "---------------------------------------------------------------------------------"; printf "%-40s | %-15s | %-15s\n" "Plugin Skipped" "Time w/ Skip" "Impact (Base-Skip)"; echo "---------------------------------------------------------------------------------"
     local results=(); for plugin in "${active_plugins[@]}"; do
         local time_with_skip_s; time_with_skip_s=$(_get_wp_execution_time plugin list --skip-plugins="$plugin")
@@ -84,8 +83,12 @@ function find_slow_plugins() {
         local p_name; p_name=$(echo "$result_line" | cut -d'|' -f2); local t_skip; t_skip=$(echo "$result_line" | cut -d'|' -f3); local i_str; i_str=$(echo "$result_line" | cut -d'|' -f4)
         printf "%-40s | %-15s | %-15s\n" "$p_name" "$t_skip" "$i_str"
     done
-    echo "---------------------------------------------------------------------------------"; echo ""; echo "✅ Test Complete"
-    echo "💡 Note: This measures impact on a specific WP-CLI command. For front-end or"; echo "   admin profiling, consider using a plugin like Query Monitor or New Relic."; echo ""
+    echo "---------------------------------------------------------------------------------";
+    echo ""; 
+    echo "✅ Test Complete"
+    echo "💡 Note: This measures impact on a specific WP-CLI command. For front-end or";
+    echo "   admin profiling, consider using a plugin like Query Monitor or New Relic.";
+    echo ""
 }
 
 # ----------------------------------------------------
@@ -147,4 +150,98 @@ function find_hidden_plugins() {
         echo "💡 These plugins are active but may be hidden from the admin view or standard WP-CLI list."
         echo "   Common offenders are management plugins (like ManageWP's 'worker') or potentially malicious code."
     fi
+}
+
+# ----------------------------------------------------
+#  Scans for potential malware and verifies WordPress core/plugin integrity.
+# ----------------------------------------------------
+function find_malware() {
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! command -v grep &> /dev/null; then echo "❌ Error: 'grep' command not found." >&2; return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    echo "🚀 Starting malware scan..."
+    echo "This process will check for suspicious code patterns and verify core/plugin file integrity."
+    echo
+
+    # --- 1. Hunt for suspicious PHP code ---
+    echo "--- Step 1/3: Searching for suspicious PHP code patterns... ---"
+    local suspicious_patterns=(
+        'eval(base64_decode('
+        'eval(gzinflate('
+        'eval(gzuncompress('
+        'eval(str_rot13('
+        'preg_replace.*\/e'
+        'create_function'
+        'FilesMan'
+        'c99shell'
+        'r57shell'
+        'shell_exec('
+        'passthru('
+        'system('
+        'phpinfo('
+        'assert('
+    )
+
+    local found_suspicious_files=false
+    local combined_pattern
+    combined_pattern=$(IFS='|'; echo "${suspicious_patterns[*]}")
+    local search_results
+    search_results=$(grep -rn --include='*.php' -iE "$combined_pattern" . 2>/dev/null)
+
+    if [ -n "$search_results" ]; then
+        echo "⚠️ Found potentially malicious code in the following files:"
+        echo "-----------------------------------------------------"
+        echo "$search_results"
+        echo "-----------------------------------------------------"
+        echo "💡 Review these files carefully. They may contain legitimate code that matches these patterns."
+        found_suspicious_files=true
+    else
+        echo "✅ No suspicious code patterns found."
+    fi
+    echo
+
+     # --- 2. Verify WordPress Core Checksums ---
+    echo "--- Step 2/3: Verifying WordPress core file integrity... ---"
+    if ! "$WP_CLI_CMD" core verify-checksums --skip-plugins --skip-themes; then
+        echo "⚠️ WordPress core verification failed. The files listed above may have been modified."
+    else
+        echo "✅ WordPress core files verified successfully."
+    fi
+    echo
+
+    # --- 3. Verify Plugin Checksums ---
+    echo "--- Step 3/3: Verifying plugin file integrity (from wordpress.org)... ---"
+    local stderr_file_plugin
+    stderr_file_plugin=$(mktemp)
+
+    local plugin_csv_data
+    plugin_csv_data=$("$WP_CLI_CMD" plugin verify-checksums --all --format=csv --skip-plugins --skip-themes --quiet 2> "$stderr_file_plugin")
+    local plugin_checksum_status=$?
+    
+    local plugin_summary_error
+    plugin_summary_error=$(cat "$stderr_file_plugin")
+    rm "$stderr_file_plugin"
+
+    if [ $plugin_checksum_status -ne 0 ]; then
+        echo "⚠️ Plugin verification encountered an error or found mismatches."
+
+        # Check if there is any CSV data to display
+        if [[ -n "$plugin_csv_data" ]]; then
+            echo "$plugin_csv_data" | "$GUM_CMD" table --separator "," --print
+        fi
+        
+        # Display the summary error if it exists
+        if [ -n "$plugin_summary_error" ]; then
+            echo "$plugin_summary_error"
+        fi
+        echo "💡 This may include plugins not in the wordpress.org directory (premium plugins) or modified files."
+    else
+        echo "✅ All plugins from wordpress.org verified successfully."
+    fi
+    echo
+
+    echo "✅ Malware scan complete."
 }
