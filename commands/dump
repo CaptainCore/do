@@ -72,5 +72,40 @@ function run_dump() {
     local FILE_SIZE
     FILE_SIZE=$(du -h "$OUTPUT_FILE" | cut -f1 | xargs)
 
+    # --- WordPress URL Logic ---
+    local dump_url=""
+    # Silently check if WP-CLI is available and we're in a WordPress installation.
+    if setup_wp_cli &>/dev/null && "$WP_CLI_CMD" core is-installed --quiet 2>/dev/null; then
+        local wp_home
+        wp_home=$("$WP_CLI_CMD" option get home --skip-plugins --skip-themes 2>/dev/null)
+        
+        # We need `realpath` for this to work reliably
+        if [ -n "$wp_home" ] && command -v realpath &>/dev/null; then
+            local wp_root_path
+            # Use `wp config path` to get the wp-config.php path, which is more reliable.
+            wp_root_path=$("$WP_CLI_CMD" config path --quiet 2>/dev/null)
+            
+            # Only proceed if we found a valid wp-config.php path.
+            if [ -n "$wp_root_path" ] && [ -f "$wp_root_path" ]; then
+                wp_root_path=$(dirname "$wp_root_path")
+                
+                local current_path
+                current_path=$(realpath ".")
+                
+                # Get the path of the current directory relative to the WordPress root
+                local relative_path
+                relative_path=${current_path#"$wp_root_path"}
+                
+                # Construct the final URL
+                # This ensures no double slashes and correctly handles the root directory case
+                dump_url="${wp_home%/}${relative_path}/${OUTPUT_FILE}"
+            fi
+        fi
+    fi
+    # --- End WordPress URL Logic ---
+
     echo "Generated $OUTPUT_FILE ($FILE_SIZE)"
+    if [ -n "$dump_url" ]; then
+        echo "URL: $dump_url"
+    fi
 }
