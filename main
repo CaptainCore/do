@@ -723,12 +723,14 @@ function show_command_help() {
             echo "  _do dump \"*\" -x \"*.log\" -x \"node_modules/\""
             ;;
         find)
-            echo "Finds files based on specific criteria."
+            echo "Finds files or WordPress components based on specific criteria."
             echo
             echo "Usage: _do find <subcommand> [arguments]"
             echo
             echo "Subcommands:"
             echo "  recent-files [days]  Finds files modified within the last <days>. Defaults to 1 day."
+            echo "  slow-plugins         Identifies plugins that may be slowing down WP-CLI."
+            echo "  hidden-plugins       Detects active plugins that may be hidden from the standard list."
             ;;
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
@@ -900,15 +902,13 @@ function show_usage() {
     echo "  cron                Manages cron jobs and schedules tasks to run at specific times."
     echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
-    echo "  find                Finds files based on specific criteria."
-    echo "  hidden-plugins      Detects plugins that are active but hidden from the standard list."
+    echo "  find                Finds files, slow plugins, or hidden plugins."
     echo "  install             Installs helper plugins or premium plugins."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server logs or errors in real-time."
     echo "  php-tags            Finds outdated or invalid PHP opening tags."
     echo "  reset-wp            Resets the WordPress installation to a default state."
     echo "  reset-permissions   Resets file and folder permissions to defaults."
-    echo "  slow-plugins        Identifies plugins that may be slowing down WP-CLI."
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
     echo "  update              Runs WordPress updates and logs the changes."
     echo "  upgrade             Upgrades this script to the latest version."
@@ -1168,14 +1168,17 @@ function main() {
                 recent-files)
                     find_recent_files "${positional_args[2]}"
                     ;;
+                slow-plugins)
+                    find_slow_plugins
+                    ;;
+                hidden-plugins)
+                    find_hidden_plugins
+                    ;;
                 *)
                     show_command_help "find"
                     exit 0
                     ;;
             esac
-            ;;
-        hidden-plugins)
-            hidden_plugins
             ;;
         install)
             local subcommand="${positional_args[1]}"
@@ -1237,9 +1240,6 @@ function main() {
             ;;
         reset-permissions)
             reset_permissions
-            ;;
-        slow-plugins)
-            identify_slow_plugins
             ;;
         suspend)
             local arg1="${positional_args[1]}" 
