@@ -739,6 +739,7 @@ function show_command_help() {
             echo "  slow-plugins         Identifies plugins that may be slowing down WP-CLI."
             echo "  hidden-plugins       Detects active plugins that may be hidden from the standard list."
             echo "  malware              Scans for malware and verifies core/plugin file integrity."
+            echo "  php-tags [dir]       Finds outdated PHP short tags ('<?'). Defaults to 'wp-content/'."
             ;;
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
@@ -902,7 +903,6 @@ function show_usage() {
     echo "  install             Installs helper plugins or premium plugins."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server logs or errors in real-time."
-    echo "  php-tags            Finds outdated or invalid PHP opening tags."
     echo "  reset-wp            Resets the WordPress installation to a default state."
     echo "  reset-permissions   Resets file and folder permissions to defaults."
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
@@ -1175,6 +1175,9 @@ function main() {
                     ;;
                 malware)
                     find_malware
+                    ;;
+                php-tags)
+                    find_outdated_php_tags "${positional_args[2]}"
                     ;;
                 *)
                     show_command_help "find"
