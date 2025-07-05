@@ -1,0 +1,68 @@
+# ----------------------------------------------------
+#  Launches site - updates url from dev to live,
+#  enables search engine visibility, and clears cache.
+# ----------------------------------------------------
+function run_launch() {
+
+    echo "🚀 Launching Site"
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "❌ Error: gum is required for interactive prompts." >&2; return 1; fi
+
+    # --- Interactively Get New Domain ---
+    local domain
+    domain=$("$GUM_CMD" input --placeholder "Enter the new live domain (e.g., example.com)...")
+
+    if [ -z "$domain" ]; then
+        echo "No domain entered. Launch cancelled."
+        return 1
+    fi
+
+    # --- Get Current Domain ---
+    local current_domain
+    current_domain=$("$WP_CLI_CMD" option get home --skip-plugins --skip-themes)
+    # Strip protocols
+    current_domain=${current_domain/http:\/\//}
+    current_domain=${current_domain/https:\/\//}
+    # Trim whitespace
+    current_domain=$(echo "$current_domain" | awk '{$1=$1};1')
+
+    if [[ -z "$current_domain" ]] || [[ "$current_domain" != *"."* ]]; then
+        echo "❌ Error: Could not find a valid existing domain from the WordPress installation." >&2
+        return 1
+    fi
+
+    if [[ "$current_domain" == "$domain" ]]; then
+        echo "The new domain is the same as the current domain. No changes needed."
+        return 0
+    fi
+
+    # --- Confirmation ---
+    echo "This will update the site URL from '$current_domain' to '$domain'."
+    "$GUM_CMD" confirm "Proceed with launch?" || { echo "Operation cancelled by user."; return 0; }
+
+    # --- Run URL Replacements ---
+    echo "1/2: Running search and replace for URLs..."
+    "$WP_CLI_CMD" search-replace "//$current_domain" "//$domain" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "2/2: Running search and replace for escaped URLs..."
+    "$WP_CLI_CMD" search-replace "\/\/${current_domain}" "\/\/$domain" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    # --- Final Steps ---
+    echo "Enabling search engine visibility..."
+    "$WP_CLI_CMD" option update blog_public 1 --skip-plugins --skip-themes
+
+    echo "Flushing WordPress cache..."
+    "$WP_CLI_CMD" cache flush
+
+    # Check for Kinsta environment and purge cache if present
+    if [ -f "/etc/update-motd.d/00-kinsta-welcome" ] || [[ "$current_domain" == *"kinsta"* ]]; then
+        echo "Kinsta environment detected. Purging Kinsta cache..."
+        "$WP_CLI_CMD" kinsta cache purge --all
+    fi
+
+    echo ""
+    echo "✅ Site launch complete! The new domain is '$domain'."
+}

@@ -768,6 +768,13 @@ function show_command_help() {
             echo "  helper               Installs the CaptainCore Helper plugin."
             echo "  events-calendar-pro  Installs The Events Calendar and its Pro version after prompting for a license."
             ;;
+        launch)
+            echo "Launches a site: updates URL from dev to live, enables search engines, and clears cache."
+            echo
+            echo "Usage: _do launch"
+            echo
+            echo "This command will interactively prompt you for the new domain name."
+            ;;
         migrate)
             echo "Migrates a site from a backup snapshot."
             echo
@@ -905,6 +912,7 @@ function show_usage() {
     echo "  find                Finds files, slow plugins, hidden plugins or outdated PHP tags."
     echo "  https               Applies HTTPS to all site URLs, with an option for www/non-www."
     echo "  install             Installs helper plugins or premium plugins."
+    echo "  launch              Interactively launches a site to a new domain."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server logs or errors in real-time."
     echo "  reset               Resets WordPress components or permissions."
@@ -1206,6 +1214,9 @@ function main() {
                     exit 0
                     ;;
             esac
+            ;;
+        launch)
+            run_launch
             ;;
         migrate)
             if [[ -z "$url_flag" ]]; then
