@@ -742,6 +742,14 @@ function show_command_help() {
             echo "  malware              Scans for malware and verifies core/plugin file integrity."
             echo "  php-tags [dir]       Finds outdated PHP short tags ('<?'). Defaults to 'wp-content/'."
             ;;
+        https)
+            echo "Applies HTTPS to all site URLs."
+            echo
+            echo "Usage: _do https"
+            echo
+            echo "This command will interactively ask whether to use 'www.' or not in the final URL"
+            echo "and then perform a search-and-replace across the entire database."
+            ;;
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
             echo
@@ -895,6 +903,7 @@ function show_usage() {
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
     echo "  email               Sends an email using wp_mail via WP-CLI."
     echo "  find                Finds files, slow plugins, hidden plugins or outdated PHP tags."
+    echo "  https               Applies HTTPS to all site URLs, with an option for www/non-www."
     echo "  install             Installs helper plugins or premium plugins."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server logs or errors in real-time."
@@ -1176,6 +1185,9 @@ function main() {
                     exit 0
                     ;;
             esac
+            ;;
+        https)
+            run_https
             ;;
         install)
             local subcommand="${positional_args[1]}"

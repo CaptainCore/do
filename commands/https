@@ -1,0 +1,63 @@
+# ----------------------------------------------------
+#  Applies HTTPS to a WordPress site's URLs.
+# ----------------------------------------------------
+function run_https() {
+    echo "🚀 Applying HTTPS to site URLs..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "❌ Error: gum is required for interactive prompts." >&2; return 1; fi
+
+    # --- Get Base Domain ---
+    # Strips http/https and www to get a clean domain name.
+    local domain
+    domain=$("$WP_CLI_CMD" option get home)
+    domain=${domain/http:\/\/www./}
+    domain=${domain/https:\/\/www./}
+    domain=${domain/http:\/\//}
+    domain=${domain/https:\/\//}
+    # Trim whitespace just in case
+    domain=$( echo "$domain" | awk '{$1=$1};1' )
+
+    # --- Ask User Preference for 'www' ---
+    local use_www=false
+    # Ask the user, with "No" as the default option.
+    # If they select "Yes" (exit code 0), then set use_www to true.
+    if "$GUM_CMD" confirm "Should the new HTTPS URL include 'www.'?" --default=false; then
+        use_www=true
+    fi
+
+    # --- Define Target URLs ---
+    local new_url
+    local new_url_escaped
+    if [ "$use_www" = true ]; then
+        new_url="https://www.$domain"
+        new_url_escaped="https:\/\/www.$domain"
+    else
+        new_url="https://$domain"
+        new_url_escaped="https:\/\/$domain"
+    fi
+
+    echo "This will update all URLs to use '$new_url'."
+    "$GUM_CMD" confirm "Proceed with search and replace?" || { echo "Operation cancelled by user."; return 0; }
+
+    # --- Run Replacements ---
+    echo "1/4: Replacing http://$domain ..."
+    "$WP_CLI_CMD" search-replace "http://$domain" "$new_url" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "2/4: Replacing http://www.$domain ..."
+    "$WP_CLI_CMD" search-replace "http://www.$domain" "$new_url" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "3/4: Replacing escaped http:\/\/$domain ..."
+    "$WP_CLI_CMD" search-replace "http:\/\/$domain" "$new_url_escaped" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "4/4: Replacing escaped http:\/\/www.$domain ..."
+    "$WP_CLI_CMD" search-replace "http:\/\/www.$domain" "$new_url_escaped" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "Flushing WordPress cache..."
+    "$WP_CLI_CMD" cache flush
+
+    echo ""
+    echo "✅ HTTPS migration complete! All URLs updated to '$new_url'."
+}
