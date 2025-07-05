@@ -108,3 +108,102 @@ function db_optimize() {
     echo ""
     echo "✅ Database optimization complete."
 }
+
+# ----------------------------------------------------
+#  Changes the database table prefix for a WordPress installation.
+# ----------------------------------------------------
+function db_change_prefix() {
+    echo "🚀 Starting Database Prefix Change 🚀"
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "❌ Error: gum is required for interactive prompts." >&2; return 1; fi
+    if ! command -v sed &>/dev/null; then echo "❌ Error: sed command not found." >&2; return 1; fi
+
+    # --- Get Current and New Prefix ---
+    local db_prefix
+    db_prefix=$("$WP_CLI_CMD" db prefix)
+    echo "Current database prefix is: $db_prefix"
+
+    local random_string
+    # Use a more portable random string generator to avoid locale issues.
+    if command -v openssl &>/dev/null; then
+        random_string=$(openssl rand -hex 3) # 6 hex characters
+    elif command -v md5sum &>/dev/null; then
+        random_string=$(date +%s | md5sum | head -c 5)
+    elif command -v sha1sum &>/dev/null; then
+        random_string=$(date +%s | sha1sum | head -c 5)
+    else
+        # A simpler fallback if no hashing tool is found
+        random_string=$(date +%s | cut -c 6-10) # last 5 digits of timestamp
+    fi
+    local db_prefix_new
+    db_prefix_new=$("$GUM_CMD" input --value="wp_${random_string}_" --prompt="Enter the new database prefix: ")
+
+    if [ -z "$db_prefix_new" ]; then
+        echo "❌ No new prefix entered. Aborting."
+        return 1
+    fi
+    
+    if [ "$db_prefix" == "$db_prefix_new" ]; then
+        echo "❌ The new prefix is the same as the current prefix. Aborting."
+        return 1
+    fi
+
+    echo "You are about to change the database prefix from '${db_prefix}' to '${db_prefix_new}'."
+    "$GUM_CMD" confirm "This is a potentially destructive operation. Are you sure you want to continue?" || { echo "Operation cancelled."; return 0; }
+
+    # --- Backup Database ---
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        return 1
+    fi
+    local db_file="${private_dir}/prefix-change-backup-$(date +"%Y-%m-%d-%H%M%S").sql"
+    echo "Step 1/5: Backing up database to a temporary file..."
+    if ! "$WP_CLI_CMD" db export "$db_file" --add-drop-table; then
+        echo "❌ Error: Failed to create database backup. Aborting."
+        return 1
+    fi
+    echo "✅ Database backup created at: $db_file"
+
+    # --- Modify SQL File ---
+    echo "Step 2/5: Modifying the database backup with the new prefix..."
+    # The -i flag for sed behaves differently on macOS/BSD vs Linux.
+    # Providing a backup extension (e.g., -i.bak) makes it work on both.
+    sed -i.bak "s#\`${db_prefix}#\`${db_prefix_new}#g" "$db_file"
+    sed -i.bak "s#'${db_prefix}user_roles#'${db_prefix_new}user_roles#g" "$db_file"
+    sed -i.bak "s#'${db_prefix}capabilities#'${db_prefix_new}capabilities#g" "$db_file"
+    sed -i.bak "s#'${db_prefix}user_level#'${db_prefix_new}user_level#g" "$db_file"
+    echo "✅ SQL file modified."
+
+    # --- Reset and Import ---
+    echo "Step 3/5: Resetting the database (dropping all tables)..."
+    "$WP_CLI_CMD" db reset --yes
+
+    echo "Step 4/5: Importing the modified database..."
+    if ! "$WP_CLI_CMD" db import "$db_file"; then
+        echo "❌ Error: Failed to import the modified database."
+        echo "   Your original database is backed up at: $db_file"
+        echo "   You may need to manually restore it."
+        # Clean up the .bak file
+        rm -f "${db_file}.bak"
+        return 1
+    fi
+    echo "✅ Database imported successfully."
+    # Clean up the .bak file created by sed
+    rm -f "${db_file}.bak"
+
+    # --- Update wp-config.php ---
+    echo "Step 5/5: Updating wp-config.php with the new prefix..."
+    if ! "$WP_CLI_CMD" config set table_prefix "$db_prefix_new" --skip-plugins --skip-themes; then
+         echo "❌ Error: Failed to update the table_prefix in your wp-config.php file."
+         echo "   Please update it manually to: \$table_prefix = '$db_prefix_new';"
+         return 1
+    fi
+    echo "✅ wp-config.php updated."
+    
+    echo ""
+    echo "✨ Database prefix change complete!"
+    echo "   The backup file from before the change is still available at: $db_file"
+}
