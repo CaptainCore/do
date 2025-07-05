@@ -789,20 +789,14 @@ function show_command_help() {
             echo "Arguments:"
             echo "  [directory]  (Optional) The directory to search in. Defaults to 'wp-content/'."
             ;;
-        reset-wp)
-            echo "Resets the WordPress installation to a default state."
+        reset)
+            echo "Resets WordPress components or permissions."
             echo
-            echo "Usage: _do reset-wp --admin_user=<username> [--admin_email=<email>]"
+            echo "Usage: _do reset <subcommand> [arguments]"
             echo
-            echo "Flags:"
-            echo "  --admin_user=<username>   (Required) The username for the new administrator."
-            echo "  --admin_email=<email>     (Optional) The email for the new administrator."
-            echo "                            Defaults to the current site's admin email."
-            ;;
-        reset-permissions)
-            echo "Resets file and folder permissions to defaults (755 for dirs, 644 for files)."
-            echo
-            echo "Usage: _do reset-permissions"
+            echo "Subcommands:"
+            echo "  wp           Resets the WordPress installation to a default state."
+            echo "  permissions  Resets file and folder permissions to defaults (755 for dirs, 644 for files)."
             ;;
         suspend)
             echo "Activates or deactivates a suspend message shown to visitors."
@@ -903,8 +897,7 @@ function show_usage() {
     echo "  install             Installs helper plugins or premium plugins."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server logs or errors in real-time."
-    echo "  reset-wp            Resets the WordPress installation to a default state."
-    echo "  reset-permissions   Resets file and folder permissions to defaults."
+    echo "  reset               Resets WordPress components or permissions."
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
     echo "  update              Runs WordPress updates and logs the changes."
     echo "  upgrade             Upgrades this script to the latest version."
@@ -958,7 +951,6 @@ function main() {
     local update_urls_flag=""
     local now_flag=""
     local admin_user_flag=""
-    local admin_email_flag=""
     local path_flag=""
     local all_files_flag=""
     local force_flag=""
@@ -997,10 +989,6 @@ function main() {
           ;;
         --admin_user=*)
           admin_user_flag="${1#*=}"
-          shift
-          ;;
-        --admin_email=*)
-          admin_email_flag="${1#*=}"
           shift
           ;;
         --all)
@@ -1235,16 +1223,20 @@ function main() {
         php-tags)
             find_outdated_php_tags "${positional_args[1]}"
             ;;
-        reset-wp)
-            if [[ -z "$admin_user_flag" ]]; then
-                echo "Error: The 'reset-wp' command requires the --admin_user=<...> flag." >&2
-                show_command_help "reset-wp"
-                exit 1
-            fi
-            reset_site "$admin_user_flag" "$admin_email_flag"
-            ;;
-        reset-permissions)
-            reset_permissions
+        reset)
+            local subcommand="${positional_args[1]}"
+            case "$subcommand" in
+                wp)
+                    reset_wp "$admin_user_flag"
+                    ;;
+                permissions)
+                    reset_permissions
+                    ;;
+                *)
+                    show_command_help "reset"
+                    exit 0
+                    ;;
+            esac
             ;;
         suspend)
             local arg1="${positional_args[1]}" 

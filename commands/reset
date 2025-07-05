@@ -1,9 +1,15 @@
 # ----------------------------------------------------
+#  Reset Commands
+#  Handles resetting WordPress components or permissions.
+# ----------------------------------------------------
+
+# ----------------------------------------------------
 #  Resets the WordPress installation to a clean, default state.
 # ----------------------------------------------------
-function reset_site() {
-    local admin_user="$1"
-    local admin_email="$2"
+function reset_wp() {
+    # This function now only accepts an optional email flag.
+    # The admin user is selected interactively.
+    local admin_email="$1"
 
     # --- Pre-flight Checks ---
     if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
@@ -11,8 +17,30 @@ function reset_site() {
     if ! command -v wget &>/dev/null; then echo "❌ Error: wget not found." >&2; return 1; fi
     if ! command -v unzip &>/dev/null; then echo "❌ Error: unzip not found." >&2; return 1; fi
     if ! command -v curl &>/dev/null; then echo "❌ Error: curl not found." >&2; return 1; fi
+    if ! setup_gum; then echo "❌ Error: gum is required for the interactive admin picker." >&2; return 1; fi
 
     echo "🚀 Starting WordPress Site Reset 🚀"
+
+    # --- Interactively Select Admin User ---
+    echo "Fetching list of administrators..."
+    local admin_users
+    admin_users=$("$WP_CLI_CMD" user list --role=administrator --field=user_login --format=csv)
+    
+    if [ -z "$admin_users" ]; then
+        echo "❌ Error: No administrator users found to assign to the new installation." >&2
+        return 1
+    fi
+
+    local admin_user
+    admin_user=$(echo "$admin_users" | "$GUM_CMD" choose --header "Select an administrator for the new installation")
+
+    if [ -z "$admin_user" ]; then
+        echo "No administrator selected. Aborting reset."
+        return 0
+    fi
+    echo "✅ Selected administrator: $admin_user"
+    # --- End Select Admin User ---
+
     echo "This is a destructive operation."
     # A 3-second countdown to allow the user to abort (Ctrl+C)
     for i in {3..1}; do echo -n "Continuing in $i... "; sleep 1; done; echo
@@ -21,10 +49,10 @@ function reset_site() {
     local url; url=$( "$WP_CLI_CMD" option get home --skip-plugins --skip-themes )
     local title; title=$( "$WP_CLI_CMD" option get blogname --skip-plugins --skip-themes )
 
-    # If admin_email is not supplied, get it from the current installation
+    # If admin_email flag is not supplied, get it from the selected user.
     if [ -z "$admin_email" ]; then
-        admin_email=$("$WP_CLI_CMD" option get admin_email --skip-plugins --skip-themes)
-        echo "ℹ️ Admin email not provided. Using existing email: $admin_email"
+        admin_email=$("$WP_CLI_CMD" user get "$admin_user" --field=user_email --format=csv)
+        echo "ℹ️ Admin email not provided. Using email from selected user '$admin_user': $admin_email"
     fi
 
     # --- Perform Reset ---
@@ -69,4 +97,14 @@ function reset_site() {
     echo "✅ WordPress reset complete!"
     echo "   URL: $url"
     echo "   Admin User: $admin_user"
+}
+
+# ----------------------------------------------------
+#  Resets file and folder permissions to common defaults (755 for dirs, 644 for files).
+# ----------------------------------------------------
+function reset_permissions() {
+    echo "Resetting file and folder permissions to defaults"
+    find . -type d -exec chmod 755 {} \;
+    find . -type f -exec chmod 644 {} \;
+    echo "✅ Permissions have been reset."
 }
