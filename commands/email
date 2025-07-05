@@ -1,0 +1,54 @@
+# ----------------------------------------------------
+#  Sends an email using wp_mail.
+# ----------------------------------------------------
+function run_email() {
+    echo "🚀 Preparing to send an email via WP-CLI..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "Aborting: gum setup failed." >&2; return 1; fi
+
+    # --- Gather Email Details with Gum ---
+    local to_email
+    to_email=$("$GUM_CMD" input --placeholder="Recipient email address...")
+    if [ -z "$to_email" ]; then echo "❌ No email address provided. Aborting."; return 1; fi
+
+    local subject
+    subject=$("$GUM_CMD" input --placeholder="Email subject...")
+    if [ -z "$subject" ]; then echo "❌ No subject provided. Aborting."; return 1; fi
+
+    local content
+    echo "Enter email content (press Ctrl+D when finished):"
+    content=$("$GUM_CMD" write)
+    if [ -z "$content" ]; then echo "❌ No content provided. Aborting."; return 1; fi
+
+    # --- Construct and Execute Command ---
+    echo "Sending email..."
+
+    # Escape single quotes in the variables to prevent breaking the wp eval command
+    local escaped_to_email; escaped_to_email=$(printf "%s" "$to_email" | sed "s/'/\\\'/g")
+    local escaped_subject; escaped_subject=$(printf "%s" "$subject" | sed "s/'/\\\'/g")
+    local escaped_content; escaped_content=$(printf "%s" "$content" | sed "s/'/\\\'/g")
+
+    local wp_command="wp_mail( '$escaped_to_email', '$escaped_subject', '$escaped_content', ['Content-Type: text/html; charset=UTF-8'] );"
+
+    # Use a temporary variable to capture the output from wp eval
+    local eval_output
+    eval_output=$("$WP_CLI_CMD" eval "$wp_command" 2>&1)
+    local exit_code=$?
+
+    # The `wp_mail` function in WordPress returns `true` on success and `false` on failure.
+    # However, `wp eval` doesn't directly translate this boolean to an exit code.
+    # We can check the output. A successful `wp_mail` call via `wp eval` usually produces no output.
+    # A failure might produce a PHP error or warning.
+    if [ $exit_code -eq 0 ]; then
+        echo "✅ Email command sent successfully to $to_email."
+        echo "   Please check the recipient's inbox and the mail server logs to confirm delivery."
+    else
+        echo "❌ Error: The 'wp eval' command failed. Please check your WordPress email configuration."
+        echo "   WP-CLI output:"
+        echo "$eval_output"
+        return 1
+    fi
+}

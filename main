@@ -722,6 +722,13 @@ function show_command_help() {
             echo "  _do dump \"wp-content/plugins/my-plugin/**/*.php\""
             echo "  _do dump \"*\" -x \"*.log\" -x \"node_modules/\""
             ;;
+        email)
+            echo "Sends an email using wp_mail via WP-CLI."
+            echo
+            echo "Usage: _do email"
+            echo
+            echo "This command will interactively prompt for the recipient, subject, and content."
+            ;;
         find)
             echo "Finds files or WordPress components based on specific criteria."
             echo
@@ -890,7 +897,8 @@ function show_usage() {
     echo "  cron                Manages cron jobs and schedules tasks to run at specific times."
     echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
-    echo "  find                Finds files, slow plugins, or hidden plugins."
+    echo "  email               Sends an email using wp_mail via WP-CLI."
+    echo "  find                Finds files, slow plugins, hidden plugins or outdated PHP tags."
     echo "  install             Installs helper plugins or premium plugins."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server logs or errors in real-time."
@@ -1149,6 +1157,9 @@ function main() {
                 return 1
             fi
             run_dump "${positional_args[1]}" "${exclude_patterns[@]}"
+            ;;
+        email)
+            run_email
             ;;
         find)
             local subcommand="${positional_args[1]}"
