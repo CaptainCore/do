@@ -3,6 +3,9 @@
 #  enables search engine visibility, and clears cache.
 # ----------------------------------------------------
 function run_launch() {
+    # The domain is passed as the first argument, skip_confirm as the second
+    local domain="$1"
+    local skip_confirm="$2"
 
     echo "🚀 Launching Site"
 
@@ -11,9 +14,14 @@ function run_launch() {
     if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
     if ! setup_gum; then echo "❌ Error: gum is required for interactive prompts." >&2; return 1; fi
 
-    # --- Interactively Get New Domain ---
-    local domain
-    domain=$("$GUM_CMD" input --placeholder "Enter the new live domain (e.g., example.com)...")
+    # --- Get New Domain ---
+    if [ -z "$domain" ]; then
+        # If no argument is passed, prompt interactively
+        domain=$("$GUM_CMD" input --placeholder "Enter the new live domain (e.g., example.com)...")
+    else
+        # If an argument is passed, just confirm the value
+        echo "Using provided domain: $domain"
+    fi
 
     if [ -z "$domain" ]; then
         echo "No domain entered. Launch cancelled."
@@ -40,8 +48,11 @@ function run_launch() {
     fi
 
     # --- Confirmation ---
-    echo "This will update the site URL from '$current_domain' to '$domain'."
-    "$GUM_CMD" confirm "Proceed with launch?" || { echo "Operation cancelled by user."; return 0; }
+    # Only ask for confirmation if the skip_confirm flag is not true
+    if [[ "$skip_confirm" != "true" ]]; then
+        echo "This will update the site URL from '$current_domain' to '$domain'."
+        "$GUM_CMD" confirm "Proceed with launch?" || { echo "Operation cancelled by user."; return 0; }
+    fi
 
     # --- Run URL Replacements ---
     echo "1/2: Running search and replace for URLs..."

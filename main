@@ -771,9 +771,10 @@ function show_command_help() {
         launch)
             echo "Launches a site: updates URL from dev to live, enables search engines, and clears cache."
             echo
-            echo "Usage: _do launch"
+            echo "Usage: _do launch [--domain=<domain>]"
             echo
-            echo "This command will interactively prompt you for the new domain name."
+            echo "Flags:"
+            echo "  --domain=<domain>  (Optional) The new domain name. If omitted, you will be prompted interactively."
             ;;
         migrate)
             echo "Migrates a site from a backup snapshot."
@@ -912,7 +913,7 @@ function show_usage() {
     echo "  find                Finds files, slow plugins, hidden plugins or outdated PHP tags."
     echo "  https               Applies HTTPS to all site URLs, with an option for www/non-www."
     echo "  install             Installs helper plugins or premium plugins."
-    echo "  launch              Interactively launches a site to a new domain."
+    echo "  launch              Launches a site to a new domain, using a flag or interactively."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server logs or errors in real-time."
     echo "  reset               Resets WordPress components or permissions."
@@ -972,6 +973,7 @@ function main() {
     local path_flag=""
     local all_files_flag=""
     local force_flag=""
+    local domain_flag=""
     local exclude_patterns=()
     local positional_args=()
     
@@ -979,6 +981,10 @@ function main() {
       case $1 in
         --url=*)
           url_flag="${1#*=}"
+          shift
+          ;;
+        --domain=*)
+          domain_flag="${1#*=}"
           shift
           ;;
         --top=*)
@@ -1216,7 +1222,7 @@ function main() {
             esac
             ;;
         launch)
-            run_launch
+            run_launch "$domain_flag"
             ;;
         migrate)
             if [[ -z "$url_flag" ]]; then
