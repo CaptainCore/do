@@ -868,3 +868,138 @@ function vault_delete() {
     echo "✅ Snapshot ${snapshot_id} has been forgotten."
     echo "💡 Note: This only removes the snapshot reference. To free up storage space by removing the underlying data, run '_do vault prune'."
 }
+
+function vault_snapshot_info() {
+    local snapshot_id="$1"
+
+    if [ -z "$snapshot_id" ];
+    then
+        echo "❌ Error: You must provide a snapshot ID."
+        show_command_help "vault" >&2
+        return 1
+    fi
+
+    # --- Pre-flight Checks ---
+    if ! setup_restic; then return 1; fi
+    if ! setup_gum; then return 1; fi
+    if ! command -v php &>/dev/null; then
+        echo "❌ Error: The 'php' command is required for this operation."
+        >&2
+        return 1
+    fi
+
+    # --- Setup Restic Environment ---
+    if ! _setup_vault_env; then
+        return 1
+    fi
+
+    # --- Fetch Snapshot Data ---
+    echo "🔎 Fetching information for snapshot ${snapshot_id}..."
+    local snapshots_json
+    snapshots_json=$("$GUM_CMD" spin --spinner dot --title "Fetching repository data..." -- \
+        "$RESTIC_CMD" snapshots --json)
+
+    if [ $? -ne 0 ]; then
+        echo "❌ Error: Failed to fetch snapshot list from the repository."
+        >&2
+        unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+        return 1
+    fi
+
+    # --- PHP Parser ---
+    # This script searches the JSON list for the specific snapshot ID and falls back to 'restic stats' if needed.
+    local php_parser_code='
+$target_id = $argv[1] ?? "";
+$restic_cmd = $argv[2] ?? "restic";
+
+if (empty($target_id)) { exit(1);
+}
+
+$json_data = file_get_contents("php://stdin");
+$snapshots = json_decode($json_data, true);
+if (json_last_error() !== JSON_ERROR_NONE || !is_array($snapshots)) {
+    exit(1);
+}
+
+$found_snap = null;
+foreach ($snapshots as $snap) {
+    if ((isset($snap["id"]) && strpos($snap["id"], $target_id) === 0) || (isset($snap["short_id"]) && $snap["short_id"] === $target_id)) {
+        $found_snap = $snap;
+        break;
+    }
+}
+
+if ($found_snap === null) {
+    fwrite(STDERR, "Snapshot with ID starting with \"$target_id\" not found.\n");
+    exit(1);
+}
+
+$snap = $found_snap;
+
+function format_bytes($bytes) {
+    $bytes = (float)$bytes;
+    if ($bytes >= 1073741824) { return round($bytes / 1073741824, 2) . " GB"; }
+    elseif ($bytes >= 1048576) { return round($bytes / 1048576, 2) . " MB"; }
+    elseif ($bytes >= 1024) { return round($bytes / 1024, 2) . " KB"; }
+    elseif ($bytes > 0) { return $bytes . " B"; }
+    else { return "0 B"; }
+}
+
+$output = [];
+$output["ID"] = $snap["short_id"] ?? "N/A";
+$output["Time"] = isset($snap["time"]) ? (new DateTime($snap["time"]))->format("Y-m-d H:i:s T") : "N/A";
+$output["Parent"] = $snap["parent"] ?? "None";
+$output["Paths"] = isset($snap["paths"]) && is_array($snap["paths"]) ? implode("\n", $snap["paths"]) : "N/A";
+
+$size_formatted = "N/A";
+$data_added_formatted = "N/A";
+
+if (isset($snap["summary"]["total_bytes_processed"])) {
+    $size_formatted = format_bytes($snap["summary"]["total_bytes_processed"]);
+    if (isset($snap["summary"]["data_added"])) {
+        $data_added_formatted = format_bytes($snap["summary"]["data_added"]);
+    }
+} else {
+    fwrite(STDERR, "Snapshot summary not found. Calculating size with '\''restic stats'\''.\n");
+    $full_snapshot_id = $snap["id"];
+    $stats_json = shell_exec(escapeshellarg($restic_cmd) . " stats --json " . escapeshellarg($full_snapshot_id));
+    if ($stats_json) {
+        $stats_data = json_decode($stats_json, true);
+        if (json_last_error() === JSON_ERROR_NONE && isset($stats_data["total_size"])) {
+            $size_formatted = format_bytes($stats_data["total_size"]);
+        }
+    }
+}
+
+$output["Size (Full)"] = $size_formatted;
+$output["Data Added (Unique)"] = $data_added_formatted;
+
+foreach($output as $key => $value) {
+    // Using addslashes and quoting to handle multi-line paths and other special characters
+    echo $key . "," . "\"" . addslashes($value) . "\"\n";
+}
+'
+    # --- Process and Display ---
+    local info_data
+    info_data=$(echo "$snapshots_json" | php -r "$php_parser_code" "$snapshot_id" "$RESTIC_CMD")
+
+    # If the PHP script returns no data, the snapshot was not found in the JSON.
+    if [ -z "$info_data" ]; then
+        echo "❌ Error: Could not find data for snapshot '${snapshot_id}' in the repository list." >&2
+        unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+        return 1
+    fi
+
+    # Unset variables for security
+    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+
+    # Display the final table
+    echo "--- Snapshot Information ---"
+    (
+      echo "Property,Value"
+      # The PHP script now correctly escapes output for the table
+      echo "$info_data"
+    ) |
+    "$GUM_CMD" table --print --separator "," --widths=25,0
+
+}
