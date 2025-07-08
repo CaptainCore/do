@@ -19,16 +19,13 @@ function vault_create() {
     fi
 
     # --- Rclone Cache Size Check ---
-    # If the EMAIL_NOTIFY variable is set, check the rclone cache size.
     if [ -n "$EMAIL_NOTIFY" ]; then
         local rclone_cache_dir="$HOME/.cache/rclone"
         if [ -d "$rclone_cache_dir" ]; then
             local cache_size_bytes
             cache_size_bytes=$(du -sb "$rclone_cache_dir" | awk '{print $1}')
-            # 10 GB in bytes
-            local size_limit_bytes=10737418240 
+            local size_limit_bytes=10737418240 # 10 GB
 
-            # If the cache is larger than the limit, send an email notification.
             if (( cache_size_bytes > size_limit_bytes )); then
                 local site_url
                 site_url=$("$WP_CLI_CMD" option get home)
@@ -37,15 +34,12 @@ function vault_create() {
                 
                 local email_subject="Rclone Cache Warning for ${site_url}"
                 local email_message="Warning: The rclone cache folder at ${rclone_cache_dir} is larger than 10GB. Current size: ${cache_size_gb}GB. This might cause issues with 'vault create' operations."
-                
                 echo "   - ⚠️  Rclone cache is large (${cache_size_gb}GB). Sending email notification to $EMAIL_NOTIFY..."
 
-                # Use wp eval to send the email via WordPress.
                 "$WP_CLI_CMD" eval "wp_mail( '$EMAIL_NOTIFY', '$email_subject', '$email_message', ['Content-Type: text/html; charset=UTF-8'] );"
             fi
         fi
     fi
-    # --- End Rclone Cache Size Check ---
 
     # --- Check/Initialize Restic Repository ---
     echo "   - Checking for repository at ${RESTIC_REPOSITORY}..."
@@ -63,14 +57,13 @@ function vault_create() {
     # --- Create DB Dump in Private Directory ---
     local private_dir
     if ! private_dir=$(_get_private_dir); then
-        return 1 # Error message handled in helper
+        return 1
     fi
     local sql_file_path="${private_dir}/database-backup.sql"
 
     echo "   - Generating database dump at: ${sql_file_path}"
     if ! "$WP_CLI_CMD" db export "$sql_file_path" --add-drop-table --single-transaction --quick --max_allowed_packet=512M > /dev/null; then
-        echo "❌ Error: Database export failed."
-        # No need to remove the file, we can just overwrite next time.
+        echo "❌ Error: Database export failed." >&2
         return 1
     fi
 
@@ -80,9 +73,8 @@ function vault_create() {
     local temporary_sql_path_in_root="${wp_root_dir}/database-backup.sql"
 
     echo "   - Temporarily moving database dump to web root for snapshotting."
-    # Move the file from its private location to the web root.
     if ! mv "$sql_file_path" "$temporary_sql_path_in_root"; then
-        echo "❌ Error: Could not move database dump to web root."
+        echo "❌ Error: Could not move database dump to web root." >&2
         return 1
     fi
 
@@ -91,16 +83,22 @@ function vault_create() {
     original_dir=$(pwd)
     echo "   - Changing to WordPress root ($wp_root_dir) for clean snapshot paths..."
     cd "$wp_root_dir" || {
-        echo "❌ Error: Could not change to WordPress root directory."
-        # Attempt to move the file back even on cd failure.
+        echo "❌ Error: Could not change to WordPress root directory." >&2
         echo "   - Attempting to move database dump back to private directory..."
         mv "$temporary_sql_path_in_root" "$sql_file_path"
         return 1
     }
+    
+    local human_readable_size
+    human_readable_size=$(du -sh . | awk '{print $1}')
+    local tag_args=()
+    if [[ -n "$human_readable_size" ]]; then
+        tag_args+=(--tag "size:${human_readable_size}")
+    fi
 
     echo "   - Backing up current directory (.), which now includes the SQL dump..."
-    # The path to back up is just '.', as the SQL file is now inside it.
-    if ! "$RESTIC_CMD" backup --verbose "." \
+    if ! "$RESTIC_CMD" backup "." \
+        "${tag_args[@]}" \
         --exclude '**.DS_Store' \
         --exclude '*timthumb.txt' \
         --exclude 'debug.log' \
@@ -108,11 +106,12 @@ function vault_create() {
         --exclude 'phperror_log' \
         --exclude 'wp-content/updraft' \
         --exclude 'wp-content/cache' \
+        --exclude 'wp-content/et-cache' \
+        --exclude 'wp-content/.wps-slots' \
+        --exclude 'wp-content/wflogs' \
         --exclude 'wp-content/uploads/sessions' \
-        --exclude 'wp-content/uploads_from_s3' \
         --exclude 'wp-snapshots'; then
         echo "❌ Error: Restic backup command failed." >&2
-        # Cleanup should happen even on failure. Move the file back.
         cd "$original_dir"
         echo "   - Moving database dump back to private directory..."
         mv "$temporary_sql_path_in_root" "$sql_file_path"
@@ -461,151 +460,139 @@ echo "💾 Download this directory ({$current_path})|download_dir|.\n";
 }
 
 # ----------------------------------------------------
-#  Lists all snapshots in the Restic repository. 
+#  Lists all snapshots in the Restic repository.
 # ----------------------------------------------------
 function vault_snapshots() {
     # Check for --all flag
     local all_flag=false
-    for arg in "$@"; 
-    do
-        if [[ "$arg" == "--all" ]]; 
-        then
-            all_flag=true 
+    for arg in "$@"; do
+        if [[ "$arg" == "--all" ]]; then
+            all_flag=true
             break
         fi
     done
 
-    if ! setup_restic; then return 1; fi 
-    if ! setup_gum; then return 1; fi 
-    if ! command -v php &>/dev/null; then echo "❌ Error: The 'php' command is required for this operation." >&2; return 1; fi 
-    if ! command -v mktemp &>/dev/null; 
-    then echo "❌ Error: The 'mktemp' command is required for this operation." >&2; return 1; fi 
-    if ! command -v wc &>/dev/null; 
-    then echo "❌ Error: The 'wc' command is required for this operation." >&2; return 1; fi 
+    if ! setup_restic; then return 1; fi
+    if ! setup_gum; then return 1; fi
+    if ! command -v php &>/dev/null; then echo "❌ Error: The 'php' command is required for this operation." >&2; return 1; fi
+    if ! command -v mktemp &>/dev/null; then echo "❌ Error: The 'mktemp' command is required for this operation." >&2; return 1; fi
+    if ! command -v wc &>/dev/null; then echo "❌ Error: The 'wc' command is required for this operation." >&2; return 1; fi
 
-    if ! _setup_vault_env; then 
+    if ! _setup_vault_env; then
         return 1 # Error message printed in helper
     fi
-    
+
     local snapshots_json
     snapshots_json=$("$GUM_CMD" spin --spinner dot --title "Fetching snapshots from repository..." -- \
     "$RESTIC_CMD" snapshots --json
 )
-    if [[ ! "$snapshots_json" =~ ^\[ ]]; then 
+    if [[ ! "$snapshots_json" =~ ^\[ ]]; then
         echo "Error: Failed to fetch snapshots. Restic output:" >&2
         echo "$snapshots_json" >&2
         exit 1
     fi
 
     local total_count
-    # Define the PHP code once to keep the command clean. 
     read -r -d '' php_script << 'EOF'
     $json_string = file_get_contents("php://stdin");
-    $snapshots = json_decode($json_string, true); 
-    if (json_last_error() === JSON_ERROR_NONE) { 
-        echo count($snapshots); 
-    } else { 
-        echo 0; 
+    $snapshots = json_decode($json_string, true);
+    if (json_last_error() === JSON_ERROR_NONE) {
+        echo count($snapshots);
+    } else {
+        echo 0;
     }
 EOF
-
-    # Pipe the JSON data into the PHP script to avoid argument length limits.
     total_count=$("$GUM_CMD" spin --spinner dot --title "Counting total snapshots..." -- \
         bash -c 'php -r "$1"' _ "$php_script" <<< "$snapshots_json"
     )
 
     echo "🔎 Fetching ${total_count} snapshots..."
 
-    if [[ "$snapshots_json" == "[]" ]]; 
-    then
-        echo "ℹ️ No snapshots found in the repository." 
-        return 0 
+    if [[ "$snapshots_json" == "[]" ]]; then
+        echo "ℹ️ No snapshots found in the repository."
+        return 0
     fi
 
-    # Define the PHP parsing script.
     local php_parser_code='
 <?php
-// Prevent direct access. 
-if (defined("STDIN")) { 
+if (defined("STDIN")) {
     $json_data = file_get_contents("php://stdin");
-    $snapshots = json_decode($json_data, true); 
-    if (json_last_error() !== JSON_ERROR_NONE) { 
-        fwrite(STDERR, "PHP Error: Failed to decode JSON from Restic - " . json_last_error_msg() . "\n"); 
-        exit(1); 
+    $snapshots = json_decode($json_data, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        fwrite(STDERR, "PHP Error: Failed to decode JSON - " . json_last_error_msg() . "\n");
+        exit(1);
     }
-    if (empty($snapshots) || !is_array($snapshots)) { 
-        exit(0); 
+    if (empty($snapshots) || !is_array($snapshots)) {
+        exit(0);
     }
-    usort($snapshots, function($a, $b) { return strtotime($b["time"]) - strtotime($a["time"]); }); 
-    foreach ($snapshots as $snap) { 
-        echo $snap["short_id"] . "|" . 
-        (new DateTime($snap["time"]))->format("Y-m-d H:i:s") . "|" . implode(", ", $snap["tags"] ?? []) . "\n"; 
-    } 
+    usort($snapshots, function($a, $b) { return strtotime($b["time"]) - strtotime($a["time"]); });
+
+    foreach ($snapshots as $snap) {
+        $size_formatted = "N/A";
+        if (isset($snap["summary"]["total_bytes_processed"])) {
+            $size_bytes = (float)$snap["summary"]["total_bytes_processed"];
+            if ($size_bytes >= 1073741824) {
+                $size_formatted = round($size_bytes / 1073741824, 2) . " GB";
+            } elseif ($size_bytes >= 1048576) {
+                $size_formatted = round($size_bytes / 1048576, 2) . " MB";
+            } elseif ($size_bytes >= 1024) {
+                $size_formatted = round($size_bytes / 1024, 2) . " KB";
+            } elseif ($size_bytes > 0) {
+                $size_formatted = $size_bytes . " B";
+            }
+        }
+
+        echo $snap["short_id"] . "|" .
+             (new DateTime($snap["time"]))->format("Y-m-d H:i:s") . "|" .
+             $size_formatted . "\n";
+    }
 }
 '
-    # Use a temporary file to execute the PHP script to avoid shell interpretation issues. 
     local php_script_file
-    php_script_file=$(mktemp) 
-    if [ -z "$php_script_file" ]; 
-    then
-        echo "❌ Error: Could not create a temporary file for the PHP script." 
-        >&2 
+    php_script_file=$(mktemp)
+    if [ -z "$php_script_file" ]; then
+        echo "❌ Error: Could not create a temporary file for the PHP script." >&2
         return 1
     fi
 
-    # Write the PHP code to the temp file. 
-    echo "$php_parser_code" > "$php_script_file" 
-
-    # Execute the script, piping the JSON to it. 
+    echo "$php_parser_code" > "$php_script_file"
     local snapshot_list
-    snapshot_list=$(printf "%s" "$snapshots_json" | php -f "$php_script_file" 2>/dev/null) 
-    
-    # Clean up the temp file immediately after use. 
-    rm -f "$php_script_file" 
+    snapshot_list=$(printf "%s" "$snapshots_json" | php -f "$php_script_file" 2>/dev/null)
+    rm -f "$php_script_file"
 
-    # Check if the PHP parsing produced any output.
-    if [ -z "$snapshot_list" ]; 
-    then
-        echo "❌ Error parsing snapshot list. Restic output may be malformed or an error occurred in the PHP script." 
-        >&2 
+    if [ -z "$snapshot_list" ]; then
+        echo "❌ Error parsing snapshot list." >&2
         return 1
     fi
 
     local display_items=()
     local data_items=()
 
-    while IFS='|' 
-    read -r id time tags; do
-        # Add a check to skip empty lines. 
-        if [ -z "$id" ]; then 
+    while IFS='|' read -r id time size; do
+        if [ -z "$id" ]; then
             continue
         fi
-        display_items+=("$(printf "%-9s | %-20s | %s" "$id" "$time" "$tags")")
+        display_items+=("$(printf "%-9s | %-20s | %-10s" "$id" "$time" "$size")")
         data_items+=("$id")
     done <<< "$snapshot_list"
 
     local selected_display
     selected_display=$(printf "%s\n" "${display_items[@]}" | "$GUM_CMD" filter --height=20 --prompt="👇 Select a snapshot to browse" --indicator="→" --placeholder="")
 
-    if [ -z "$selected_display" ]; 
-    then echo "No snapshot selected."; return 0; fi
+    if [ -z "$selected_display" ]; then echo "No snapshot selected."; return 0; fi
 
     local selected_id
     selected_id=$(echo "$selected_display" | awk '{print $1}')
 
-    # Create a temporary file for the cache
-    local cache_file; 
-    cache_file=$(mktemp) 
+    local cache_file;
+    cache_file=$(mktemp)
     if ! _cache_snapshot_files "$selected_id" "$cache_file"; then
         [ -f "$cache_file" ] && rm -f "$cache_file"
-        return 1 # Error message shown in helper
+        return 1
     fi
 
-    # Start the interactive browser using the cache file. 
-    _browse_snapshot "$selected_id" "$cache_file" 
-
-    # Clean up the cache file when the browser is closed. 
-    rm -f "$cache_file" 
+    _browse_snapshot "$selected_id" "$cache_file"
+    rm -f "$cache_file"
 }
 
 # ----------------------------------------------------
