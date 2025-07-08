@@ -790,3 +790,83 @@ function vault_prune() {
 
     echo "✅ Vault prune complete!"
 }
+
+# ----------------------------------------------------
+#  Deletes a specific snapshot from the Restic repository.
+# ----------------------------------------------------
+function vault_delete() {
+    local snapshot_id="$1"
+
+    if [ -z "$snapshot_id" ]; then
+        echo "❌ Error: You must provide a snapshot ID to delete." >&2
+        show_command_help "vault" >&2
+        return 1
+    fi
+
+    # --- Pre-flight Checks ---
+    if ! setup_restic; then return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    # --- Setup Restic Environment ---
+    if ! _setup_vault_env; then
+        return 1 # Error message printed in helper
+    fi
+
+    echo "You are about to permanently delete snapshot: ${snapshot_id}"
+    echo "This action cannot be undone."
+    if ! "$GUM_CMD" confirm "Are you sure you want to delete this snapshot?"; then
+        echo "Delete operation cancelled."
+        unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+        return 0
+    fi
+
+    echo "   - Deleting snapshot ${snapshot_id}..."
+    local forget_output
+    # Capture stdout and stderr to check for errors
+    forget_output=$("$RESTIC_CMD" forget "$snapshot_id" 2>&1)
+    local forget_exit_code=$?
+
+    # Check if the command failed
+    if [ $forget_exit_code -ne 0 ]; then
+        # If it failed, check if it was due to a lock
+        if echo "$forget_output" | grep -q "unable to create lock"; then
+            echo "⚠️ The repository is locked. A previous operation may have failed or is still running."
+            echo "$forget_output"
+            
+            if "$GUM_CMD" confirm "Do you want to attempt to remove the stale lock and retry?"; then
+                echo "   - Attempting to unlock repository..."
+                if ! "$RESTIC_CMD" unlock; then
+                    echo "❌ Error: Failed to unlock the repository. Please check it manually." >&2
+                    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+                    return 1
+                fi
+                
+                echo "   - Unlock successful. Retrying delete operation..."
+                if ! "$RESTIC_CMD" forget "$snapshot_id"; then
+                     echo "❌ Error: Restic forget command failed even after unlocking." >&2
+                     unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+                     return 1
+                fi
+            else
+                echo "Delete operation cancelled due to locked repository."
+                unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+                return 0
+            fi
+        else
+            # The failure was for a reason other than a lock
+            echo "❌ Error: Failed to delete snapshot ${snapshot_id}." >&2
+            echo "$forget_output" >&2
+            unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+            return 1
+        fi
+    else
+        # Print the success output from the first attempt
+        echo "$forget_output"
+    fi
+
+    # --- Cleanup ---
+    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+
+    echo "✅ Snapshot ${snapshot_id} has been forgotten."
+    echo "💡 Note: This only removes the snapshot reference. To free up storage space by removing the underlying data, run '_do vault prune'."
+}
