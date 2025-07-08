@@ -463,14 +463,7 @@ echo "💾 Download this directory ({$current_path})|download_dir|.\n";
 #  Lists all snapshots in the Restic repository.
 # ----------------------------------------------------
 function vault_snapshots() {
-    # Check for --all flag
-    local all_flag=false
-    for arg in "$@"; do
-        if [[ "$arg" == "--all" ]]; then
-            all_flag=true
-            break
-        fi
-    done
+    local output_mode="$1"
 
     if ! setup_restic; then return 1; fi
     if ! setup_gum; then return 1; fi
@@ -575,6 +568,11 @@ if (defined("STDIN")) {
         display_items+=("$(printf "%-9s | %-20s | %-10s" "$id" "$time" "$size")")
         data_items+=("$id")
     done <<< "$snapshot_list"
+
+    if [[ "$output_mode" == "true" ]]; then
+        printf "%s\n" "${display_items[@]}"
+        return 0
+    fi
 
     local selected_display
     selected_display=$(printf "%s\n" "${display_items[@]}" | "$GUM_CMD" filter --height=20 --prompt="👇 Select a snapshot to browse" --indicator="→" --placeholder="")

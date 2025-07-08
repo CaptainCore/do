@@ -851,14 +851,16 @@ function show_command_help() {
         vault)
             echo "Manages secure, full site snapshots in a remote Restic repository."
             echo
-            echo "Usage: _do vault <subcommand>"
+            echo "Usage: _do vault <subcommand> [arguments]"
             echo
             echo "Subcommands:"
-            echo "  create         Creates a new snapshot of the current site."
-            echo "  snapshots      Lists available snapshots."
-            echo "  mount          Mounts the entire repository to a local folder for browsing."
-            echo "  info           Displays statistics about the repository."
-            echo "  prune          Removes unnecessary data from the repository."
+            echo "  create                Creates a new snapshot of the current site."
+            echo "  snapshots [--output]  Lists available snapshots. Use --output for a non-interactive list."
+            echo "  snapshot-info <id>    Displays detailed information for a single snapshot."
+            echo "  delete <id>           Deletes a specific snapshot by its ID."
+            echo "  mount                 Mounts the entire repository to a local folder for Browse."
+            echo "  info                  Displays statistics about the repository."
+            echo "  prune                 Removes unnecessary data from the repository."
             echo
             echo "Authentication:"
             echo "  This command requires B2 and Restic credentials, provided either by"
@@ -974,6 +976,7 @@ function main() {
     local all_files_flag=""
     local force_flag=""
     local domain_flag=""
+    local output_flag=""
     local exclude_patterns=()
     local positional_args=()
     
@@ -1021,6 +1024,10 @@ function main() {
           ;;
         --force)
           force_flag=true
+          shift
+          ;;
+        --output)
+          output_flag=true
           shift
           ;;
         --path=*)
@@ -1313,8 +1320,16 @@ function main() {
                 create)
                     vault_create
                     ;;
+                delete)
+                    local snapshot_id_to_delete="${positional_args[2]}"
+                    vault_delete "$snapshot_id_to_delete"
+                    ;;
+                snapshot-info)
+                    local snapshot_id_to_show="${positional_args[2]}"
+                    vault_snapshot_info "$snapshot_id_to_show"
+                    ;;
                 snapshots)
-                    vault_snapshots
+                    vault_snapshots "$output_flag"
                     ;;
                 mount)
                     vault_mount
