@@ -8,7 +8,7 @@
 # ----------------------------------------------------
 
 # --- Global Variables ---
-CAPTAINCORE_DO_VERSION="1.1"
+CAPTAINCORE_DO_VERSION="1.2"
 GUM_VERSION="0.14.4"
 CWEBP_VERSION="1.5.0"
 RCLONE_VERSION="1.69.3"

@@ -8,14 +8,16 @@
 # ----------------------------------------------------
 
 # --- Global Variables ---
-CAPTAINCORE_DO_VERSION="1.1"
+CAPTAINCORE_DO_VERSION="1.2"
 GUM_VERSION="0.14.4"
 CWEBP_VERSION="1.5.0"
 RCLONE_VERSION="1.69.3"
 GIT_VERSION="2.50.0"
 GUM_CMD=""
 CWEBP_CMD=""
+IDENTIFY_CMD=""
 WP_CLI_CMD=""
+RESTIC_CMD=""
 
 # --- Helper Functions ---
 
@@ -30,30 +32,41 @@ function _get_private_dir() {
         return 0
     fi
 
-    # --- Tier 1: Preferred WP-CLI Method ---
-    if setup_wp_cli; then
+    local wp_root=""
+    local parent_dir=""
+
+    # --- Tier 1: Preferred WP-CLI Method (if in a WP directory) ---
+    # Check if wp-cli is set up and if we are in a WP installation.
+    if setup_wp_cli && "$WP_CLI_CMD" core is-installed --quiet 2>/dev/null; then
         local wp_config_path
         wp_config_path=$("$WP_CLI_CMD" config path --quiet 2>/dev/null)
         if [ -n "$wp_config_path" ] && [ -f "$wp_config_path" ]; then
-            local wp_root
             wp_root=$(dirname "$wp_config_path")
-            local parent_dir
             parent_dir=$(dirname "$wp_root")
 
-            # Check for WP Engine's private directory first
+            # --- WPE Specific Checks ---
+            # A. Check for _wpeprivate inside the WP root directory first (most common).
+            if [ -d "${wp_root}/_wpeprivate" ]; then
+                CAPTAINCORE_PRIVATE_DIR="${wp_root}/_wpeprivate"
+                echo "$CAPTAINCORE_PRIVATE_DIR"
+                return 0
+            fi
+            # B. Check for _wpeprivate in the parent directory.
             if [ -d "${parent_dir}/_wpeprivate" ]; then
                 CAPTAINCORE_PRIVATE_DIR="${parent_dir}/_wpeprivate"
                 echo "$CAPTAINCORE_PRIVATE_DIR"
                 return 0
             fi
+
+            # --- Standard Checks (relative to WP root's parent) ---
             # Check for a standard ../private directory
             if [ -d "${parent_dir}/private" ]; then
                 CAPTAINCORE_PRIVATE_DIR="${parent_dir}/private"
                 echo "$CAPTAINCORE_PRIVATE_DIR"
                 return 0
             fi
-            # Try to create a ../private directory
-            if mkdir -p "${parent_dir}/private"; then
+            # Try to create a ../private directory, suppressing errors
+            if mkdir -p "${parent_dir}/private" 2>/dev/null; then
                 CAPTAINCORE_PRIVATE_DIR="${parent_dir}/private"
                 echo "$CAPTAINCORE_PRIVATE_DIR"
                 return 0
@@ -70,35 +83,40 @@ function _get_private_dir() {
     # --- Tier 2: Manual Fallback (if WP-CLI fails or not in a WP install) ---
     local current_dir
     current_dir=$(pwd)
-    if [ -d "${current_dir}/_wpeprivate" ]; then # WPE check
+    # WPE check in current directory
+    if [ -d "${current_dir}/_wpeprivate" ]; then
         CAPTAINCORE_PRIVATE_DIR="${current_dir}/_wpeprivate"
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
-    if [ -d "../private" ]; then # Relative private check
+    # Relative private check
+    if [ -d "../private" ]; then
         CAPTAINCORE_PRIVATE_DIR=$(cd ../private && pwd)
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
-    if mkdir -p "../private"; then # Attempt to create relative private
+    # Attempt to create relative private, suppressing errors
+    if mkdir -p "../private" 2>/dev/null; then
         CAPTAINCORE_PRIVATE_DIR=$(cd ../private && pwd)
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
-    if [ -d "../tmp" ]; then # Relative tmp check
+    # Relative tmp check
+    if [ -d "../tmp" ]; then
         CAPTAINCORE_PRIVATE_DIR=$(cd ../tmp && pwd)
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
 
     # --- Tier 3: Last Resort Fallback to Home Directory ---
-    if mkdir -p "$HOME/private"; then # Home directory check
+    # Suppress errors in case $HOME is not writable
+    if mkdir -p "$HOME/private" 2>/dev/null; then
         CAPTAINCORE_PRIVATE_DIR="$HOME/private"
         echo "$CAPTAINCORE_PRIVATE_DIR"
         return 0
     fi
 
-    echo "Error: Could not find or create a suitable private directory." >&2
+    echo "Error: Could not find or create a suitable private, writable directory." >&2
     return 1
 }
 
@@ -106,141 +124,322 @@ function _get_private_dir() {
 #  Checks for and installs 'gum' if not present. Sets GUM_CMD on success.
 # ----------------------------------------------------
 function setup_gum() {
-    #  Return if already found
+    # Return if already found
     if [[ -n "$GUM_CMD" ]]; then return 0; fi
 
-    #  If gum is already in the PATH, we're good to go.
+    # If gum is already in the PATH, we're good to go.
     if command -v gum &> /dev/null; then
         GUM_CMD="gum"
         return 0
     fi
 
-    local gum_dir="gum_${GUM_VERSION}_Linux_x86_64"
-    local gum_executable="$HOME/private/${gum_dir}/gum"
-    
-    #  Check for a local installation
-    if [ -f "$gum_executable" ] && "$gum_executable" --version &> /dev/null; then
-        GUM_CMD="$gum_executable"
-        return 0
-    fi
-
-    #  If not found or not working, download it
-    echo "Required tool 'gum' not found. Installing..." >&2
+    # Find the private directory for storing tools
     local private_dir
     if ! private_dir=$(_get_private_dir); then
-        # Error message is handled by the helper function
+        echo "Error: Cannot find a writable directory to install gum." >&2
         return 1
     fi
-    cd "$private_dir" || { echo "Error: Could not enter private directory." >&2; return 1; }
 
-    local gum_tarball="${gum_dir}.tar.gz"
-    if ! wget --quiet "https://github.com/charmbracelet/gum/releases/download/v${GUM_VERSION}/${gum_tarball}" || ! tar -xf "${gum_tarball}"; then
-        echo "Error: Failed to download or extract gum." >&2
-        cd - > /dev/null
-        return 1
+    # Find the executable inside the private directory if it's already installed
+    local existing_executable
+    existing_executable=$(find "$private_dir" -name gum -type f 2>/dev/null | head -n 1)
+    if [ -n "$existing_executable" ] && [ -x "$existing_executable" ] && "$existing_executable" --version &> /dev/null; then
+        GUM_CMD="$existing_executable"
+        return 0
+    fi
+    
+    echo "Required tool 'gum' not found. Installing to '${private_dir}'..." >&2
+    local original_dir; original_dir=$(pwd)
+    cd "$private_dir" || { echo "Error: Could not enter private directory '${private_dir}'." >&2; return 1; }
+
+    local gum_dir_name="gum_${GUM_VERSION}_Linux_x86_64"
+    local gum_tarball="${gum_dir_name}.tar.gz"
+
+    if ! curl -sSL "https://github.com/charmbracelet/gum/releases/download/v${GUM_VERSION}/${gum_tarball}" -o "${gum_tarball}"; then
+        echo "Error: Failed to download gum." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    # Find the path of the 'gum' binary WITHIN the tarball before extracting
+    local gum_path_in_tar
+    gum_path_in_tar=$(tar -tf "${gum_tarball}" | grep '/gum$' | head -n 1)
+
+    if [ -z "$gum_path_in_tar" ]; then
+        echo "Error: Could not find 'gum' executable within the downloaded tarball." >&2
+        rm -f "${gum_tarball}"; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+
+    # Now extract the tarball
+    if ! tar -xf "${gum_tarball}"; then
+        echo "Error: Failed to extract gum from tarball." >&2
+        rm -f "${gum_tarball}"; cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
     rm -f "${gum_tarball}"
 
-    #  Final check
-    if [ -f "$gum_executable" ] && "$gum_executable" --version &> /dev/null; then
+    # The full path to the executable is the private dir + the path from the tarball
+    local gum_executable="${private_dir}/${gum_path_in_tar}"
+
+    if [ -f "$gum_executable" ]; then
+        chmod +x "$gum_executable"
+    else
+        echo "Error: gum executable not found at expected path after extraction: ${gum_executable}" >&2
+        cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+
+    # Final check
+    if [ -x "$gum_executable" ] && "$gum_executable" --version &> /dev/null; then
         echo "'gum' installed successfully." >&2
         GUM_CMD="$gum_executable"
     else
-        echo "Error: gum installation failed." >&2
-        cd - > /dev/null
-        return 1
+        echo "Error: gum installation failed. The binary at ${gum_executable} might not be executable or compatible." >&2
+        cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
-    cd - > /dev/null
+    
+    cd "$original_dir" > /dev/null 2>&1; return 0;
 }
 
 # ----------------------------------------------------
 #  Checks for and installs 'cwebp' if not present. Sets CWEBP_CMD on success.
 # ----------------------------------------------------
 function setup_cwebp() {
-    #  Return if already found
+    # Return if already found
     if [[ -n "$CWEBP_CMD" ]]; then return 0; fi
 
-    #  If cwebp is already in the PATH, we're good to go.
-    if command -v cwebp &> /dev/null; then
-        CWEBP_CMD="cwebp"
-        return 0
+    if command -v cwebp &> /dev/null; then CWEBP_CMD="cwebp"; return 0; fi
+
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        echo "Error: Cannot find a writable directory to install cwebp." >&2; return 1;
+    fi
+
+    local existing_executable
+    existing_executable=$(find "$private_dir" -name cwebp -type f 2>/dev/null | head -n 1)
+    if [ -n "$existing_executable" ] && [ -x "$existing_executable" ] && "$existing_executable" -version &> /dev/null; then
+        CWEBP_CMD="$existing_executable"; return 0;
     fi
     
-    local cwebp_dir="libwebp-${CWEBP_VERSION}-linux-x86-64"
-    local cwebp_executable="$HOME/private/${cwebp_dir}/bin/cwebp"
+    echo "Required tool 'cwebp' not found. Installing to '${private_dir}'..." >&2
+    local original_dir; original_dir=$(pwd)
+    cd "$private_dir" || { echo "Error: Could not enter private directory '${private_dir}'." >&2; return 1; }
 
-    #  Check for a local installation
-    if [ -f "$cwebp_executable" ] && "$cwebp_executable" -version &> /dev/null; then
-        CWEBP_CMD="$cwebp_executable"
-        return 0
+    local cwebp_dir_name="libwebp-${CWEBP_VERSION}-linux-x86-64"
+    local cwebp_tarball="${cwebp_dir_name}.tar.gz"
+
+    if ! curl -sSL "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/${cwebp_tarball}" -o "${cwebp_tarball}"; then
+        echo "Error: Failed to download cwebp." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    local cwebp_path_in_tar
+    cwebp_path_in_tar=$(tar -tf "${cwebp_tarball}" | grep '/bin/cwebp$' | head -n 1)
+    if [ -z "$cwebp_path_in_tar" ]; then
+        echo "Error: Could not find 'cwebp' executable within the downloaded tarball." >&2
+        rm -f "${cwebp_tarball}"; cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
 
-    echo "Required tool 'cwebp' not found. Installing to ~/private..." >&2
-    mkdir -p "$HOME/private"
-    cd "$HOME/private" || { echo "Error: Could not enter ~/private." >&2; return 1; }
-
-    local cwebp_tarball="${cwebp_dir}.tar.gz"
-    if ! wget --quiet "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/${cwebp_tarball}" || ! tar -xzf "${cwebp_tarball}"; then
-        echo "Error: Failed to download or extract cwebp." >&2
-        cd - > /dev/null
-        return 1
+    if ! tar -xzf "${cwebp_tarball}"; then
+        echo "Error: Failed to extract cwebp." >&2; rm -f "${cwebp_tarball}"; cd "$original_dir" > /dev/null 2>&1; return 1;
     fi
     rm -f "${cwebp_tarball}"
 
-    #  Final check
-    if [ -f "$cwebp_executable" ] && "$cwebp_executable" -version &> /dev/null; then
-        echo "'cwebp' installed successfully." >&2
-        CWEBP_CMD="$cwebp_executable"
+    local cwebp_executable="${private_dir}/${cwebp_path_in_tar}"
+    if [ -f "$cwebp_executable" ]; then
+        chmod +x "$cwebp_executable";
     else
-        echo "Error: cwebp installation failed." >&2
+        echo "Error: cwebp executable not found at expected path: ${cwebp_executable}" >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+
+    if [ -x "$cwebp_executable" ] && "$cwebp_executable" -version &> /dev/null; then
+        echo "'cwebp' installed successfully." >&2; CWEBP_CMD="$cwebp_executable";
+    else
+        echo "Error: cwebp installation failed." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    cd "$original_dir" > /dev/null 2>&1; return 0;
+}
+
+# ----------------------------------------------------
+#  Checks for and installs ImageMagick if not present. Sets IDENTIFY_CMD on success.
+# ----------------------------------------------------
+function setup_imagemagick() {
+    # Return if already found
+    if [[ -n "$IDENTIFY_CMD" ]]; then
+        return 0
+    fi
+
+    # If identify is already in the PATH, we're good to go.
+    if command -v identify &> /dev/null; then
+        IDENTIFY_CMD="identify"
+        return 0
+    fi
+
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        # Error message is handled by the helper function
+        return 1
+    fi
+
+    # Define the path where the extracted binary should be
+    local identify_executable="${private_dir}/squashfs-root/usr/bin/identify"
+    
+    # Check if we have already extracted it
+    if [ -f "$identify_executable" ] && "$identify_executable" -version &> /dev/null; then
+        IDENTIFY_CMD="$identify_executable"
+        return 0
+    fi
+
+    # If not found, download and extract the AppImage
+    echo "Required tool 'identify' not found. Sideloading via AppImage extraction..." >&2
+
+    local imagemagick_appimage_path="${private_dir}/ImageMagick.AppImage"
+    
+    # Let's use the 'gcc' version as it's a common compiler toolchain for Linux
+    local appimage_url="https://github.com/ImageMagick/ImageMagick/releases/download/7.1.1-47/ImageMagick-82572af-gcc-x86_64.AppImage"
+    
+    echo "Downloading from ${appimage_url}..." >&2
+    if ! wget --quiet "$appimage_url" -O "$imagemagick_appimage_path"; then
+        echo "Error: Failed to download the ImageMagick AppImage." >&2
+        rm -f "$imagemagick_appimage_path" # Clean up partial download
+        return 1
+    fi
+    
+    chmod +x "$imagemagick_appimage_path"
+
+    # --- EXTRACTION STEP ---
+    # This is the key change to work around the FUSE error.
+    echo "Extracting AppImage..." >&2
+    
+    # Change into the private directory to contain the extraction
+    cd "$private_dir" || { echo "Error: Could not enter private directory." >&2; return 1; }
+    
+    # Run the extraction. This creates a 'squashfs-root' directory.
+    if ! ./ImageMagick.AppImage --appimage-extract >/dev/null; then
+        echo "Error: Failed to extract the ImageMagick AppImage." >&2
+        # Clean up on failure
+        rm -f "ImageMagick.AppImage"
+        rm -rf "squashfs-root"
         cd - > /dev/null
         return 1
     fi
+
+    # We don't need the AppImage file anymore after extraction
+    rm -f "ImageMagick.AppImage"
+    
+    # Return to the original directory
     cd - > /dev/null
+
+    # Final check
+    if [ -f "$identify_executable" ] && "$identify_executable" -version &> /dev/null; then
+        echo "'identify' binary extracted successfully to ${private_dir}/squashfs-root/" >&2
+        IDENTIFY_CMD="$identify_executable"
+    else
+        echo "Error: ImageMagick extraction failed. Could not find the 'identify' executable." >&2
+        return 1
+    fi
 }
 
 # ----------------------------------------------------
 #  Checks for and installs 'rclone' if not present. Sets RCLONE_CMD on success.
 # ----------------------------------------------------
 function setup_rclone() {
-    #  Return if already found
+    # Return if already found
     if [[ -n "$RCLONE_CMD" ]]; then return 0; fi
 
-    #  If rclone is already in the PATH, we're good to go.
-    if command -v rclone &> /dev/null; then
-        RCLONE_CMD="rclone"
+    if command -v rclone &> /dev/null; then RCLONE_CMD="rclone"; return 0; fi
+    if ! command -v unzip &>/dev/null; then echo "Error: 'unzip' command is required for rclone installation." >&2; return 1; fi
+
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        echo "Error: Cannot find a writable directory to install rclone." >&2; return 1;
+    fi
+    
+    local existing_executable
+    existing_executable=$(find "$private_dir" -name rclone -type f 2>/dev/null | head -n 1)
+    if [ -n "$existing_executable" ] && [ -x "$existing_executable" ] && "$existing_executable" --version &> /dev/null; then
+        RCLONE_CMD="$existing_executable"; return 0;
+    fi
+
+    echo "Required tool 'rclone' not found. Installing to '${private_dir}'..." >&2
+    local original_dir; original_dir=$(pwd)
+    cd "$private_dir" || { echo "Error: Could not enter private directory '${private_dir}'." >&2; return 1; }
+
+    local rclone_zip="rclone-v${RCLONE_VERSION}-linux-amd64.zip"
+    if ! curl -sSL "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/${rclone_zip}" -o "${rclone_zip}"; then
+        echo "Error: Failed to download rclone." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    local rclone_path_in_zip
+    rclone_path_in_zip=$(unzip -l "${rclone_zip}" | grep '/rclone$' | awk '{print $4}' | head -n 1)
+    if [ -z "$rclone_path_in_zip" ]; then
+        echo "Error: Could not find 'rclone' executable within the downloaded zip." >&2
+        rm -f "${rclone_zip}"; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+
+    if ! unzip -q -o "${rclone_zip}"; then
+        echo "Error: Failed to extract rclone." >&2; rm -f "${rclone_zip}"; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    rm -f "${rclone_zip}"
+    
+    local rclone_executable="${private_dir}/${rclone_path_in_zip}"
+    if [ -f "$rclone_executable" ]; then
+        chmod +x "$rclone_executable";
+    else
+        echo "Error: rclone executable not found at expected path: ${rclone_executable}" >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    if [ -x "$rclone_executable" ] && "$rclone_executable" --version &> /dev/null; then
+        echo "'rclone' installed successfully." >&2; RCLONE_CMD="$rclone_executable";
+    else
+        echo "Error: rclone installation failed." >&2; cd "$original_dir" > /dev/null 2>&1; return 1;
+    fi
+    
+    cd "$original_dir" > /dev/null 2>&1; return 0;
+}
+
+# ----------------------------------------------------
+#  Checks for and installs 'restic' if not present.
+#  Sets RESTIC_CMD on success.
+# ----------------------------------------------------
+function setup_restic() {
+    #  Return if already found
+    if [[ -n "$RESTIC_CMD" ]]; then return 0; fi
+
+    #  If restic is already in the PATH, we're good.
+    if command -v restic &> /dev/null; then
+        RESTIC_CMD="restic"
         return 0
     fi
 
-    local rclone_dir="rclone-v${RCLONE_VERSION}-linux-amd64"
-    local rclone_executable="$HOME/private/${rclone_dir}/rclone"
-
-    #  Check for a local installation
-    if [ -f "$rclone_executable" ] && "$rclone_executable" --version &> /dev/null; then
-        RCLONE_CMD="$rclone_executable"
+    # Check for local installation in private dir
+    local restic_executable="$HOME/private/restic"
+    if [ -f "$restic_executable" ] && "$restic_executable" version &> /dev/null; then
+        RESTIC_CMD="$restic_executable"
         return 0
     fi
 
-    #  If not found or not working, download it
-    echo "Required tool 'rclone' not found. Installing to ~/private..." >&2
-    if ! command -v unzip &>/dev/null; then echo "Error: 'unzip' command is required for installation." >&2; return 1; fi
+    #  If not found, download it
+    echo "Required tool 'restic' not found. Installing..." >&2
+    if ! command -v bunzip2 &>/dev/null; then echo "Error: 'bunzip2' command is required for installation." >&2; return 1; fi
     mkdir -p "$HOME/private"
     cd "$HOME/private" || { echo "Error: Could not enter ~/private." >&2; return 1; }
 
-    local rclone_zip="rclone-v${RCLONE_VERSION}-linux-amd64.zip"
-    if ! wget --quiet "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/${rclone_zip}" || ! unzip -q "${rclone_zip}"; then
-        echo "Error: Failed to download or extract rclone." >&2
+    local restic_version="0.18.0"
+    local restic_archive="restic_${restic_version}_linux_amd64.bz2"
+    if ! curl -sL "https://github.com/restic/restic/releases/download/v${restic_version}/${restic_archive}" -o "${restic_archive}"; then
+        echo "Error: Failed to download restic." >&2
         cd - > /dev/null
         return 1
     fi
-    rm -f "${rclone_zip}"
+
+    # Decompress and extract the binary
+    bunzip2 -c "${restic_archive}" > restic_temp && mv restic_temp restic
+    rm -f "${restic_archive}"
+    chmod +x restic
 
     #  Final check
-    if [ -f "$rclone_executable" ] && "$rclone_executable" --version &> /dev/null; then
-        echo "'rclone' installed successfully." >&2
-        RCLONE_CMD="$rclone_executable"
+    if [ -f "$restic_executable" ] && "$restic_executable" version &> /dev/null; then
+        echo "'restic' installed successfully." >&2
+        RESTIC_CMD="$restic_executable"
     else
-        echo "Error: rclone installation failed." >&2
+        echo "Error: restic installation failed." >&2
         cd - > /dev/null
         return 1
     fi
@@ -252,7 +451,9 @@ function setup_rclone() {
 # ----------------------------------------------------
 function setup_git() {
     #  Return if already found
-    if [[ -n "$GIT_CMD" ]]; then return 0; fi
+    if [[ -n "$GIT_CMD" ]]; then
+        return 0
+    fi
 
     #  If git is already in the PATH, we're good to go.
     if command -v git &> /dev/null; then
@@ -260,11 +461,77 @@ function setup_git() {
         return 0
     fi
 
-    # Since git is a more complex dependency, we'll just check for it
-    # and error out if it's not installed. A proper sideload for git
-    # is significantly more involved than for the other tools.
-    echo "❌ Error: 'git' command not found. Please install Git to use checkpoint features." >&2
-    return 1
+    # --- Sideloading Logic ---
+    echo "Required tool 'git' not found. Attempting to sideload..." >&2
+    
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        return 1
+    fi
+    
+    local git_executable="${private_dir}/git/usr/bin/git"
+
+    # Check if git has already been sideloaded
+    if [ -f "$git_executable" ] && "$git_executable" --version &> /dev/null; then
+        echo "'git' found in private directory." >&2
+        GIT_CMD="$git_executable"
+        return 0
+    fi
+
+    # Check for wget and dpkg-deb, which are required for sideloading
+    if ! command -v wget &> /dev/null || ! command -v dpkg-deb &> /dev/null; then
+        echo "❌ Error: 'wget' and 'dpkg-deb' are required to sideload git." >&2
+        return 1
+    fi
+
+    # Determine OS distribution and version
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+    else
+        echo "❌ Error: Cannot determine OS distribution. /etc/os-release not found." >&2
+        return 1
+    fi
+
+    if [[ "$ID" != "ubuntu" ]]; then
+        echo "❌ Error: Sideloading git is currently only supported on Ubuntu." >&2
+        return 1
+    fi
+
+    # Construct the download URL for the git package
+    # This example uses a recent stable version. You may need to update the version number periodically.
+    local git_version="2.47.1-0ppa1~ubuntu16.04.1"
+    local git_deb_url="https://launchpad.net/~git-core/+archive/ubuntu/candidate/+build/29298725/+files/git_${git_version}_amd64.deb"
+    local git_deb_file="${private_dir}/git_latest.deb"
+
+    echo "Downloading git from ${git_deb_url}..." >&2
+    if ! wget -q -O "$git_deb_file" "$git_deb_url"; then
+        echo "❌ Error: Failed to download git .deb package." >&2
+        rm -f "$git_deb_file"
+        return 1
+    fi
+
+    echo "Extracting git package..." >&2
+    local extract_dir="${private_dir}/git"
+    mkdir -p "$extract_dir"
+    if ! dpkg-deb -x "$git_deb_file" "$extract_dir"; then
+        echo "❌ Error: Failed to extract git .deb package." >&2
+        rm -rf "$extract_dir"
+        rm -f "$git_deb_file"
+        return 1
+    fi
+
+    # Clean up the downloaded .deb file
+    rm -f "$git_deb_file"
+
+    # Final check
+    if [ -f "$git_executable" ] && "$git_executable" --version &> /dev/null; then
+        echo "'git' sideloaded successfully." >&2
+        GIT_CMD="$git_executable"
+        return 0
+    else
+        echo "❌ Error: git sideloading failed. The git binary is not available after extraction." >&2
+        return 1
+    fi
 }
 
 # ----------------------------------------------------
@@ -296,6 +563,77 @@ function setup_wp_cli() {
     # 3. If still not found, error out
     echo "❌ Error: 'wp' command not found. Please ensure WP-CLI is installed and in your PATH." >&2
     return 1
+}
+
+# ----------------------------------------------------
+#  (Helper) Uses PHP to check if a file is a WebP image.
+# ----------------------------------------------------
+function _is_webp_php() {
+    local file_path="$1"
+    if [ -z "$file_path" ]; then
+        return 1 # Return false if no file path is provided
+    fi
+
+    # IMAGETYPE_WEBP has a constant value of 18 in PHP.
+    # We will embed the file_path directly into the PHP string.
+    local php_code="
+    \$file_to_check = '${file_path}';
+    if (!file_exists(\$file_to_check)) {
+        // Silently exit if file doesn't exist, to avoid warnings.
+        exit(1);
+    }
+    if (function_exists('exif_imagetype')) {
+        // The @ suppresses warnings for unsupported file types.
+        \$image_type = @exif_imagetype(\$file_to_check);
+        if (\$image_type === 18) { // 18 is the constant for IMAGETYPE_WEBP
+            exit(0); // Exit with success code (true)
+        }
+    }
+    exit(1); // Exit with failure code (false)
+    "
+    
+    if ! setup_wp_cli; then
+      if command -v php &> /dev/null; then
+        php -r "\$file_path='${file_path}'; ${php_code}"
+        return $?
+      fi
+      return 1
+    fi
+
+    # Execute 'wp eval' with the self-contained code. No extra arguments are needed.
+    "$WP_CLI_CMD" eval "$php_code"
+    return $?
+}
+
+# ----------------------------------------------------
+#  (Primary Checker) Checks if a file is WebP, using identify or PHP fallback.
+# ----------------------------------------------------
+function _is_webp() {
+    # Determine which method to use, but only do it once.
+    if [[ -z "$IDENTIFY_METHOD" ]]; then
+        if command -v identify &> /dev/null; then
+            echo "Using 'identify' command for image type checking." >&2
+            IDENTIFY_METHOD="identify"
+        else
+            echo "Warning: 'identify' command not found. Falling back to PHP check." >&2
+            IDENTIFY_METHOD="php"
+        fi
+    fi
+
+    # Execute the chosen method
+    if [[ "$IDENTIFY_METHOD" == "identify" ]]; then
+        if [[ "$(identify -format "%m" "$1")" == "WEBP" ]]; then
+            return 0 # It is a WebP file
+        else
+            return 1 # It is not a WebP file
+        fi
+    else # Fallback to PHP
+        if _is_webp_php "$1"; then
+            return 0 # It is a WebP file
+        else
+            return 1 # It is not a WebP file
+        fi
+    fi
 }
 
 # ----------------------------------------------------
@@ -367,6 +705,7 @@ function show_command_help() {
             echo "  backup           Performs a DB-only backup to a secure private directory."
             echo "  check-autoload   Checks the size and top 25 largest autoloaded options in the DB."
             echo "  optimize         Converts tables to InnoDB, reports large tables, and cleans transients."
+            echo "  change-prefix    Changes the database table prefix."
             ;;
         dump)
             echo "Dumps the content of files matching a pattern into a single text file."
@@ -384,10 +723,58 @@ function show_command_help() {
             echo "  _do dump \"wp-content/plugins/my-plugin/**/*.php\""
             echo "  _do dump \"*\" -x \"*.log\" -x \"node_modules/\""
             ;;
+        email)
+            echo "Sends an email using wp_mail via WP-CLI."
+            echo
+            echo "Usage: _do email"
+            echo
+            echo "This command will interactively prompt for the recipient, subject, and content."
+            ;;
+        find)
+            echo "Finds files or WordPress components based on specific criteria."
+            echo
+            echo "Usage: _do find <subcommand> [arguments]"
+            echo
+            echo "Subcommands:"
+            echo "  recent-files [days]  Finds files modified within the last <days>. Defaults to 1 day."
+            echo "  slow-plugins         Identifies plugins that may be slowing down WP-CLI."
+            echo "  hidden-plugins       Detects active plugins that may be hidden from the standard list."
+            echo "  malware              Scans for malware and verifies core/plugin file integrity."
+            echo "  php-tags [dir]       Finds outdated PHP short tags ('<?'). Defaults to 'wp-content/'."
+            ;;
+        https)
+            echo "Applies HTTPS to all site URLs."
+            echo
+            echo "Usage: _do https"
+            echo
+            echo "This command will interactively ask whether to use 'www.' or not in the final URL"
+            echo "and then perform a search-and-replace across the entire database."
+            ;;
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
             echo
-            echo "Usage: _do convert-to-webp"
+            echo "Usage: _do convert-to-webp [--all]"
+            echo
+            echo "Flags:"
+            echo "  --all    Convert all images, regardless of size. Defaults to images > 1MB."
+            ;;
+         install)
+            echo "Installs helper or premium plugins."
+            echo
+            echo "Usage: _do install <subcommand> [--flags]"
+            echo
+            echo "Subcommands:"
+            echo "  kinsta-mu            Installs the Kinsta MU plugin. Use --force to install outside a Kinsta environment."
+            echo "  helper               Installs the CaptainCore Helper plugin."
+            echo "  events-calendar-pro  Installs The Events Calendar and its Pro version after prompting for a license."
+            ;;
+        launch)
+            echo "Launches a site: updates URL from dev to live, enables search engines, and clears cache."
+            echo
+            echo "Usage: _do launch [--domain=<domain>]"
+            echo
+            echo "Flags:"
+            echo "  --domain=<domain>  (Optional) The new domain name. If omitted, you will be prompted interactively."
             ;;
         migrate)
             echo "Migrates a site from a backup snapshot."
@@ -419,25 +806,14 @@ function show_command_help() {
             echo "Arguments:"
             echo "  [directory]  (Optional) The directory to search in. Defaults to 'wp-content/'."
             ;;
-        reset-wp)
-            echo "Resets the WordPress installation to a default state."
+        reset)
+            echo "Resets WordPress components or permissions."
             echo
-            echo "Usage: _do reset-wp --admin_user=<username> [--admin_email=<email>]"
+            echo "Usage: _do reset <subcommand> [arguments]"
             echo
-            echo "Flags:"
-            echo "  --admin_user=<username>   (Required) The username for the new administrator."
-            echo "  --admin_email=<email>     (Optional) The email for the new administrator."
-            echo "                            Defaults to the current site's admin email."
-            ;;
-        reset-permissions)
-            echo "Resets file and folder permissions to defaults (755 for dirs, 644 for files)."
-            echo
-            echo "Usage: _do reset-permissions"
-            ;;
-        slow-plugins)
-            echo "Identifies plugins that may be slowing down WP-CLI."
-            echo
-            echo "Usage: _do slow-plugins"
+            echo "Subcommands:"
+            echo "  wp           Resets the WordPress installation to a default state."
+            echo "  permissions  Resets file and folder permissions to defaults (755 for dirs, 644 for files)."
             ;;
         suspend)
             echo "Activates or deactivates a suspend message shown to visitors."
@@ -466,6 +842,33 @@ function show_command_help() {
             echo "                      'after' checkpoint, and logs the changes."
             echo "  list                Shows a list of past updates to inspect from the generated list."
             echo "  list-generate       Generates a detailed list of all updates for fast viewing."
+            ;;
+        upgrade)
+            echo "Upgrades the _do script to the latest version."
+            echo
+            echo "Usage: _do upgrade"
+            ;;
+        vault)
+            echo "Manages secure, full site snapshots in a remote Restic repository."
+            echo
+            echo "Usage: _do vault <subcommand> [arguments]"
+            echo
+            echo "Subcommands:"
+            echo "  create                Creates a new snapshot of the current site."
+            echo "  snapshots [--output]  Lists available snapshots. Use --output for a non-interactive list."
+            echo "  snapshot-info <id>    Displays detailed information for a single snapshot."
+            echo "  delete <id>           Deletes a specific snapshot by its ID."
+            echo "  mount                 Mounts the entire repository to a local folder for Browse."
+            echo "  info                  Displays statistics about the repository."
+            echo "  prune                 Removes unnecessary data from the repository."
+            echo
+            echo "Authentication:"
+            echo "  This command requires B2 and Restic credentials, provided either by"
+            echo "  environment variables (B2_ACCOUNT_ID, B2_ACCOUNT_KEY, RESTIC_PASSWORD,"
+            echo "  B2_BUCKET, B2_PATH) or by piping a 5-line secrets file via stdin."
+            echo
+            echo "Example (stdin):"
+            echo "  cat secrets.txt | _do vault snapshots"
             ;;
         version)
             echo "Displays the current version of the _do script."
@@ -508,14 +911,18 @@ function show_usage() {
     echo "  cron                Manages cron jobs and schedules tasks to run at specific times."
     echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
+    echo "  email               Sends an email using wp_mail via WP-CLI."
+    echo "  find                Finds files, slow plugins, hidden plugins or outdated PHP tags."
+    echo "  https               Applies HTTPS to all site URLs, with an option for www/non-www."
+    echo "  install             Installs helper plugins or premium plugins."
+    echo "  launch              Launches a site to a new domain, using a flag or interactively."
     echo "  migrate             Migrates a site from a backup URL or local file."
     echo "  monitor             Monitors server logs or errors in real-time."
-    echo "  php-tags            Finds outdated or invalid PHP opening tags."
-    echo "  reset-wp            Resets the WordPress installation to a default state."
-    echo "  reset-permissions   Resets file and folder permissions to defaults."
-    echo "  slow-plugins        Identifies plugins that may be slowing down WP-CLI."
+    echo "  reset               Resets WordPress components or permissions."
     echo "  suspend             Activates or deactivates a suspend message shown to visitors."
     echo "  update              Runs WordPress updates and logs the changes."
+    echo "  upgrade             Upgrades this script to the latest version."
+    echo "  vault               Manages secure snapshots in a remote Restic repository."
     echo "  version             Displays the current version of the _do script."
     echo "  wpcli               Checks for and identifies sources of WP-CLI warnings."
     echo ""
@@ -565,8 +972,11 @@ function main() {
     local update_urls_flag=""
     local now_flag=""
     local admin_user_flag=""
-    local admin_email_flag=""
     local path_flag=""
+    local all_files_flag=""
+    local force_flag=""
+    local domain_flag=""
+    local output_flag=""
     local exclude_patterns=()
     local positional_args=()
     
@@ -574,6 +984,10 @@ function main() {
       case $1 in
         --url=*)
           url_flag="${1#*=}"
+          shift
+          ;;
+        --domain=*)
+          domain_flag="${1#*=}"
           shift
           ;;
         --top=*)
@@ -604,8 +1018,16 @@ function main() {
           admin_user_flag="${1#*=}"
           shift
           ;;
-        --admin_email=*)
-          admin_email_flag="${1#*=}"
+        --all)
+          all_files_flag=true
+          shift
+          ;;
+        --force)
+          force_flag=true
+          shift
+          ;;
+        --output)
+          output_flag=true
           shift
           ;;
         --path=*)
@@ -736,6 +1158,9 @@ function main() {
                 optimize)
                     db_optimize # Originally from db-optimize command 
                     ;;
+                change-prefix)
+                    db_change_prefix
+                    ;;
                 *)
                     show_command_help "db"
                     exit 0
@@ -743,7 +1168,7 @@ function main() {
             esac
             ;;
         convert-to-webp)
-            convert_to_webp
+            convert_to_webp "$all_files_flag"
             ;;
         dump)
             # There should be exactly 2 positional args total: 'dump' and the pattern.
@@ -754,6 +1179,57 @@ function main() {
                 return 1
             fi
             run_dump "${positional_args[1]}" "${exclude_patterns[@]}"
+            ;;
+        email)
+            run_email
+            ;;
+        find)
+            local subcommand="${positional_args[1]}"
+            case "$subcommand" in
+                recent-files)
+                    find_recent_files "${positional_args[2]}"
+                    ;;
+                slow-plugins)
+                    find_slow_plugins
+                    ;;
+                hidden-plugins)
+                    find_hidden_plugins
+                    ;;
+                malware)
+                    find_malware
+                    ;;
+                php-tags)
+                    find_outdated_php_tags "${positional_args[2]}"
+                    ;;
+                *)
+                    show_command_help "find"
+                    exit 0
+                    ;;
+            esac
+            ;;
+        https)
+            run_https
+            ;;
+        install)
+            local subcommand="${positional_args[1]}"
+            case "$subcommand" in
+                kinsta-mu)
+                    install_kinsta_mu "$force_flag"
+                    ;;
+                helper)
+                    install_helper
+                    ;;
+                events-calendar-pro)
+                    install_events_calendar_pro
+                    ;;
+                *)
+                    show_command_help "install"
+                    exit 0
+                    ;;
+            esac
+            ;;
+        launch)
+            run_launch "$domain_flag"
             ;;
         migrate)
             if [[ -z "$url_flag" ]]; then
@@ -787,19 +1263,20 @@ function main() {
         php-tags)
             find_outdated_php_tags "${positional_args[1]}"
             ;;
-        reset-wp)
-            if [[ -z "$admin_user_flag" ]]; then
-                echo "Error: The 'reset-wp' command requires the --admin_user=<...> flag." >&2
-                show_command_help "reset-wp"
-                exit 1
-            fi
-            reset_site "$admin_user_flag" "$admin_email_flag"
-            ;;
-        reset-permissions)
-            reset_permissions
-            ;;
-        slow-plugins)
-            identify_slow_plugins
+        reset)
+            local subcommand="${positional_args[1]}"
+            case "$subcommand" in
+                wp)
+                    reset_wp "$admin_user_flag"
+                    ;;
+                permissions)
+                    reset_permissions
+                    ;;
+                *)
+                    show_command_help "reset"
+                    exit 0
+                    ;;
+            esac
             ;;
         suspend)
             local arg1="${positional_args[1]}" 
@@ -831,6 +1308,41 @@ function main() {
                 *)
                     show_command_help "update"
                     exit 1
+                    ;;
+            esac
+            ;;
+        upgrade)
+            run_upgrade
+            ;;
+        vault)
+            local subcommand="${positional_args[1]}" # Default to snapshots
+            case "$subcommand" in
+                create)
+                    vault_create
+                    ;;
+                delete)
+                    local snapshot_id_to_delete="${positional_args[2]}"
+                    vault_delete "$snapshot_id_to_delete"
+                    ;;
+                snapshot-info)
+                    local snapshot_id_to_show="${positional_args[2]}"
+                    vault_snapshot_info "$snapshot_id_to_show"
+                    ;;
+                snapshots)
+                    vault_snapshots "$output_flag"
+                    ;;
+                mount)
+                    vault_mount
+                    ;;
+                info)
+                    vault_info
+                    ;;
+                prune)
+                    vault_prune
+                    ;;
+                *)
+                    show_command_help "vault" >&2
+                    exit 0
                     ;;
             esac
             ;;
@@ -1714,6 +2226,7 @@ PHP
 
                     # Loop to allow viewing multiple diffs
                     while true; do
+                        clear
                         local selected_file
                         selected_file=$(echo "$changed_files" | "$GUM_CMD" filter --prompt="? Select a file to view its diff (Press Esc to exit)" --height=20 --indicator="→" --placeholder="")
 
@@ -1828,48 +2341,81 @@ function clean_disk() {
     "$RCLONE_CMD" ncdu .
 }
 # ----------------------------------------------------
-#  Finds large images and converts them to the WebP format.
+#  Finds large images and converts them to the
+#  WebP format.
 # ----------------------------------------------------
 function convert_to_webp() {
+    local all_files_flag="$1"
     echo "🚀 Starting WebP Conversion Process 🚀"
-    if ! setup_cwebp; then 
-        echo "Aborting conversion: cwebp setup failed." >&2 
+
+    if ! setup_cwebp; then
+        echo "Aborting conversion: cwebp setup failed." >&2
         return 1
     fi
-    if ! command -v identify &> /dev/null; then echo "❌ Error: 'identify' command not found. Please install ImageMagick." >&2; return 1; fi 
-    local uploads_dir="wp-content/uploads"; if [ ! -d "$uploads_dir" ]; then echo "❌ Error: Cannot find '$uploads_dir' directory." >&2; return 1; fi 
-    local before_size; before_size="$(du -sh "$uploads_dir" | awk '{print $1}')"; 
-    echo "Current uploads size: $before_size" 
-    local files;
-    files=$(find "$uploads_dir" -type f -size +1M \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" \)) 
-    if [[ -z "$files" ]]; then 
-        echo "✅ No images larger than 1MB found to convert."; return 0; 
+
+    local uploads_dir="wp-content/uploads"
+    if [ ! -d "$uploads_dir" ]; then
+        echo "❌ Error: Cannot find '$uploads_dir' directory." >&2
+        return 1
     fi
-    local count;
-    count=$(echo "$files" | wc -l); echo "Found $count image(s) over 1MB to process..."; 
-    echo "" 
-    echo "$files" | while IFS= read -r file; do 
-        if [[ "$(identify -format "%m" "$file")" == "WEBP" ]]; then 
-            echo "Skipping (already WebP): $file"; continue; 
+
+    local before_size
+    before_size="$(du -sh "$uploads_dir" | awk '{print $1}')"
+    echo "Current uploads size: $before_size"
+
+    local size_limit_mb=1
+    local message="larger than ${size_limit_mb}MB"
+    local find_args=("$uploads_dir" -type f)
+    if [[ "$all_files_flag" != "true" ]]; then
+        find_args+=(-size "+${size_limit_mb}M")
+    else
+        message="of all sizes"
+    fi
+    find_args+=(\( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \))
+
+    local files
+    files=$(find "${find_args[@]}")
+
+    if [[ -z "$files" ]]; then
+        echo "✅ No images ${message} found to convert."
+        return 0
+    fi
+    local count
+    count=$(echo "$files" | wc -l | xargs)
+    echo "Found $count image(s) ${message} to process..."
+    echo ""
+
+    local processed_count=0
+    echo "$files" | while IFS= read -r file; do
+        processed_count=$((processed_count + 1))
+        if _is_webp "$file"; then
+            echo "⚪️ Skipping ${processed_count}/${count} (already WebP): $file"
+            continue
         fi
-        local temp_file="${file}.temp.webp"; local before_file_size; 
+
+        local temp_file="${file}.temp.webp"
+        local before_file_size
         before_file_size=$(ls -lh "$file" | awk '{print $5}')
-        "$CWEBP_CMD" -q 80 "$file" -o "$temp_file" > /dev/null 2>&1 
-        if [ -s "$temp_file" ]; then 
-            mv "$temp_file" "$file"; local after_file_size; 
+
+        "$CWEBP_CMD" -q 80 "$file" -o "$temp_file" > /dev/null 2>&1
+        if [ -s "$temp_file" ]; then
+            mv "$temp_file" "$file"
+            local after_file_size
             after_file_size=$(ls -lh "$file" | awk '{print $5}')
-            echo "✅ Converted ($before_file_size -> $after_file_size): $file"
+            echo "✅ Converted ${processed_count}/${count} ($before_file_size -> $after_file_size): $file"
         else
-            rm -f "$temp_file"; 
-            echo "❌ Failed conversion: $file" 
+            rm -f "$temp_file"
+            echo "❌ Failed ${processed_count}/${count}: $file"
         fi
     done
-    echo ""; 
-    local after_size; after_size="$(du -sh "$uploads_dir" | awk '{print $1}')" 
-    echo "✅ Bulk conversion complete!"; 
-    echo "-----------------------------------------------------"; 
-    echo "   Uploads folder size reduced from $before_size to $after_size."; 
-    echo "-----------------------------------------------------" 
+
+    echo ""
+    local after_size
+    after_size="$(du -sh "$uploads_dir" | awk '{print $1}')"
+    echo "✅ Bulk conversion complete!"
+    echo "-----------------------------------------------------"
+    echo "   Uploads folder size reduced from $before_size to $after_size."
+    echo "-----------------------------------------------------"
 }
 # ----------------------------------------------------
 #  Cron Commands
@@ -2333,10 +2879,10 @@ function db_check_autoload() {
 
     echo
     echo "--- Total Autoloaded Size ---"
-    "$WP_CLI_CMD" db query "SELECT ROUND(SUM(LENGTH(option_value))/1024/1024, 2) as 'Autoload MB', COUNT(*) as 'Count' FROM $($WP_CLI_CMD db prefix)options WHERE autoload='yes';" | "$GUM_CMD" table --print --separator $'\t'
+    "$WP_CLI_CMD" db query "SELECT ROUND(SUM(LENGTH(option_value))/1024/1024, 2) as 'Autoload MB', COUNT(*) as 'Count' FROM $($WP_CLI_CMD db prefix)options WHERE autoload IN ('yes', 'on');" | "$GUM_CMD" table --print --separator $'\t'
     echo
     echo "--- Top 25 Autoloaded Options & Totals ---"
-    "$WP_CLI_CMD" db query "SELECT option_name, round(length(option_value) / 1024 / 1024, 2) as 'Size (MB)' FROM $($WP_CLI_CMD db prefix)options WHERE autoload='yes' ORDER BY length(option_value) DESC LIMIT 25" | "$GUM_CMD" table --print --separator $'\t'
+    "$WP_CLI_CMD" db query "SELECT option_name, round(length(option_value) / 1024 / 1024, 2) as 'Size (MB)' FROM $($WP_CLI_CMD db prefix)options WHERE autoload IN ('yes', 'on') ORDER BY length(option_value) DESC LIMIT 25" | "$GUM_CMD" table --print --separator $'\t'
     echo
     echo "✅ Autoload check complete."
 }
@@ -2409,6 +2955,106 @@ function db_optimize() {
     echo ""
     echo "✅ Database optimization complete."
 }
+
+# ----------------------------------------------------
+#  Changes the database table prefix for a WordPress installation.
+# ----------------------------------------------------
+function db_change_prefix() {
+    echo "🚀 Starting Database Prefix Change 🚀"
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "❌ Error: gum is required for interactive prompts." >&2; return 1; fi
+    if ! command -v sed &>/dev/null; then echo "❌ Error: sed command not found." >&2; return 1; fi
+
+    # --- Get Current and New Prefix ---
+    local db_prefix
+    db_prefix=$("$WP_CLI_CMD" db prefix)
+    echo "Current database prefix is: $db_prefix"
+
+    local random_string
+    # Use a more portable random string generator to avoid locale issues.
+    if command -v openssl &>/dev/null; then
+        random_string=$(openssl rand -hex 3) # 6 hex characters
+    elif command -v md5sum &>/dev/null; then
+        random_string=$(date +%s | md5sum | head -c 5)
+    elif command -v sha1sum &>/dev/null; then
+        random_string=$(date +%s | sha1sum | head -c 5)
+    else
+        # A simpler fallback if no hashing tool is found
+        random_string=$(date +%s | cut -c 6-10) # last 5 digits of timestamp
+    fi
+    local db_prefix_new
+    db_prefix_new=$("$GUM_CMD" input --value="wp_${random_string}_" --prompt="Enter the new database prefix: ")
+
+    if [ -z "$db_prefix_new" ]; then
+        echo "❌ No new prefix entered. Aborting."
+        return 1
+    fi
+    
+    if [ "$db_prefix" == "$db_prefix_new" ]; then
+        echo "❌ The new prefix is the same as the current prefix. Aborting."
+        return 1
+    fi
+
+    echo "You are about to change the database prefix from '${db_prefix}' to '${db_prefix_new}'."
+    "$GUM_CMD" confirm "This is a potentially destructive operation. Are you sure you want to continue?" || { echo "Operation cancelled."; return 0; }
+
+    # --- Backup Database ---
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        return 1
+    fi
+    local db_file="${private_dir}/prefix-change-backup-$(date +"%Y-%m-%d-%H%M%S").sql"
+    echo "Step 1/5: Backing up database to a temporary file..."
+    if ! "$WP_CLI_CMD" db export "$db_file" --add-drop-table; then
+        echo "❌ Error: Failed to create database backup. Aborting."
+        return 1
+    fi
+    echo "✅ Database backup created at: $db_file"
+
+    # --- Modify SQL File ---
+    echo "Step 2/5: Modifying the database backup with the new prefix..."
+    # The -i flag for sed behaves differently on macOS/BSD vs Linux.
+    # Providing a backup extension (e.g., -i.bak) makes it work on both.
+    sed -i.bak "s#\`${db_prefix}#\`${db_prefix_new}#g" "$db_file"
+    sed -i.bak "s#'${db_prefix}user_roles#'${db_prefix_new}user_roles#g" "$db_file"
+    sed -i.bak "s#'${db_prefix}capabilities#'${db_prefix_new}capabilities#g" "$db_file"
+    sed -i.bak "s#'${db_prefix}user_level#'${db_prefix_new}user_level#g" "$db_file"
+    echo "✅ SQL file modified."
+
+    # --- Reset and Import ---
+    echo "Step 3/5: Resetting the database (dropping all tables)..."
+    "$WP_CLI_CMD" db reset --yes
+
+    echo "Step 4/5: Importing the modified database..."
+    if ! "$WP_CLI_CMD" db import "$db_file"; then
+        echo "❌ Error: Failed to import the modified database."
+        echo "   Your original database is backed up at: $db_file"
+        echo "   You may need to manually restore it."
+        # Clean up the .bak file
+        rm -f "${db_file}.bak"
+        return 1
+    fi
+    echo "✅ Database imported successfully."
+    # Clean up the .bak file created by sed
+    rm -f "${db_file}.bak"
+
+    # --- Update wp-config.php ---
+    echo "Step 5/5: Updating wp-config.php with the new prefix..."
+    if ! "$WP_CLI_CMD" config set table_prefix "$db_prefix_new" --skip-plugins --skip-themes; then
+         echo "❌ Error: Failed to update the table_prefix in your wp-config.php file."
+         echo "   Please update it manually to: \$table_prefix = '$db_prefix_new';"
+         return 1
+    fi
+    echo "✅ wp-config.php updated."
+    
+    echo ""
+    echo "✨ Database prefix change complete!"
+    echo "   The backup file from before the change is still available at: $db_file"
+}
+
 # ----------------------------------------------------
 #  Dumps the content of files matching a pattern into a single text file.
 # ----------------------------------------------------
@@ -2483,8 +3129,663 @@ function run_dump() {
     local FILE_SIZE
     FILE_SIZE=$(du -h "$OUTPUT_FILE" | cut -f1 | xargs)
 
+    # --- WordPress URL Logic ---
+    local dump_url=""
+    # Silently check if WP-CLI is available and we're in a WordPress installation.
+    if setup_wp_cli &>/dev/null && "$WP_CLI_CMD" core is-installed --quiet 2>/dev/null; then
+        local wp_home
+        wp_home=$("$WP_CLI_CMD" option get home --skip-plugins --skip-themes 2>/dev/null)
+        
+        # We need `realpath` for this to work reliably
+        if [ -n "$wp_home" ] && command -v realpath &>/dev/null; then
+            local wp_root_path
+            # Use `wp config path` to get the wp-config.php path, which is more reliable.
+            wp_root_path=$("$WP_CLI_CMD" config path --quiet 2>/dev/null)
+            
+            # Only proceed if we found a valid wp-config.php path.
+            if [ -n "$wp_root_path" ] && [ -f "$wp_root_path" ]; then
+                wp_root_path=$(dirname "$wp_root_path")
+                
+                local current_path
+                current_path=$(realpath ".")
+                
+                # Get the path of the current directory relative to the WordPress root
+                local relative_path
+                relative_path=${current_path#"$wp_root_path"}
+                
+                # Construct the final URL
+                # This ensures no double slashes and correctly handles the root directory case
+                dump_url="${wp_home%/}${relative_path}/${OUTPUT_FILE}"
+            fi
+        fi
+    fi
+    # --- End WordPress URL Logic ---
+
     echo "Generated $OUTPUT_FILE ($FILE_SIZE)"
+    if [ -n "$dump_url" ]; then
+        echo "URL: $dump_url"
+    fi
 }
+# ----------------------------------------------------
+#  Sends an email using wp_mail.
+# ----------------------------------------------------
+function run_email() {
+    echo "🚀 Preparing to send an email via WP-CLI..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "Aborting: gum setup failed." >&2; return 1; fi
+
+    # --- Gather Email Details with Gum ---
+    local to_email
+    to_email=$("$GUM_CMD" input --placeholder="Recipient email address...")
+    if [ -z "$to_email" ]; then echo "❌ No email address provided. Aborting."; return 1; fi
+
+    local subject
+    subject=$("$GUM_CMD" input --placeholder="Email subject...")
+    if [ -z "$subject" ]; then echo "❌ No subject provided. Aborting."; return 1; fi
+
+    local content
+    echo "Enter email content (press Ctrl+D when finished):"
+    content=$("$GUM_CMD" write)
+    if [ -z "$content" ]; then echo "❌ No content provided. Aborting."; return 1; fi
+
+    # --- Construct and Execute Command ---
+    echo "Sending email..."
+
+    # Escape single quotes in the variables to prevent breaking the wp eval command
+    local escaped_to_email; escaped_to_email=$(printf "%s" "$to_email" | sed "s/'/\\\'/g")
+    local escaped_subject; escaped_subject=$(printf "%s" "$subject" | sed "s/'/\\\'/g")
+    local escaped_content; escaped_content=$(printf "%s" "$content" | sed "s/'/\\\'/g")
+
+    local wp_command="wp_mail( '$escaped_to_email', '$escaped_subject', '$escaped_content', ['Content-Type: text/html; charset=UTF-8'] );"
+
+    # Use a temporary variable to capture the output from wp eval
+    local eval_output
+    eval_output=$("$WP_CLI_CMD" eval "$wp_command" 2>&1)
+    local exit_code=$?
+
+    # The `wp_mail` function in WordPress returns `true` on success and `false` on failure.
+    # However, `wp eval` doesn't directly translate this boolean to an exit code.
+    # We can check the output. A successful `wp_mail` call via `wp eval` usually produces no output.
+    # A failure might produce a PHP error or warning.
+    if [ $exit_code -eq 0 ]; then
+        echo "✅ Email command sent successfully to $to_email."
+        echo "   Please check the recipient's inbox and the mail server logs to confirm delivery."
+    else
+        echo "❌ Error: The 'wp eval' command failed. Please check your WordPress email configuration."
+        echo "   WP-CLI output:"
+        echo "$eval_output"
+        return 1
+    fi
+}
+
+# ----------------------------------------------------
+#  Finds files that have been recently modified.
+# ----------------------------------------------------
+function find_recent_files() {
+    local days="${1:-1}" # Default to 1 day if no argument is provided
+
+    # Validate that the input is a number
+    if ! [[ "$days" =~ ^[0-9]+$ ]]; then
+        echo "❌ Error: Please provide a valid number of days." >&2
+        echo "Usage: _do find recent-files <days>" >&2
+        return 1
+    fi
+
+    echo "🔎 Searching for files modified in the last $days day(s)..."
+    echo
+
+    # Check the operating system to use the correct `find` command syntax.
+    # The `-printf` option is not available on macOS/BSD `find`.
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # On macOS, use -exec with `stat` for formatted, sortable output.
+        # -f "%Sm %N" formats the output: Modification time, then file name.
+        # -t "%Y-%m-%d %H:%M:%S" specifies the timestamp format for sorting.
+        find . -type f -mtime "-${days}" -exec stat -f "%Sm %N" -t "%Y-%m-%d %H:%M:%S" {} + | sort -r
+    else
+        # On Linux, the more efficient -printf option is available.
+        find . -type f -mtime "-${days}" -printf "%TY-%Tm-%Td %TH:%M:%S %p\n" | sort -r
+    fi
+
+    if [ $? -ne 0 ]; then
+        echo "❌ Error: The 'find' command failed to execute." >&2
+        return 1
+    fi
+}
+
+# ----------------------------------------------------
+#  Identifies plugins that may be slowing down WP-CLI command execution.
+# ----------------------------------------------------
+function find_slow_plugins() {
+    _get_wp_execution_time() { local output; output=$("$WP_CLI_CMD" "$@" --debug 2>&1); echo "$output" | perl -ne '/Debug \(bootstrap\): Running command: .+\(([^s]+s)/ && print $1'; }
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI (wp command) not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+
+    echo "🚀 WordPress Plugin Performance Test 🚀"
+    echo "This script measures the execution time of 'wp plugin list --debug' under various conditions."
+    echo ""
+    echo "📋 Initial Baseline Measurements for 'wp plugin list --debug':"
+
+    local time_no_theme_s; printf "  ⏳ Measuring time with NO themes loaded (--skip-themes)... "; time_no_theme_s=$(_get_wp_execution_time plugin list --skip-themes); echo "Time: $time_no_theme_s"
+    local time_no_plugins_s; printf "  ⏳ Measuring time with NO plugins loaded (--skip-plugins)... "; time_no_plugins_s=$(_get_wp_execution_time plugin list --skip-plugins); echo "Time: $time_no_plugins_s"
+    local base_time_s; printf "  ⏳ Measuring base time (ALL plugins & theme active)... "; base_time_s=$(_get_wp_execution_time plugin list)
+    if [[ -z "$base_time_s" ]]; then echo "❌ Error: Could not measure base execution time." >&2; return 1; fi;
+    echo "Base time: $base_time_s"
+    echo ""
+
+    local active_plugins=()
+    while IFS= read -r line; do
+        active_plugins+=("$line")
+    done < <("$WP_CLI_CMD" plugin list --field=name --status=active)
+
+    if [[ ${#active_plugins[@]} -eq 0 ]]; then echo "ℹ️ No active plugins found to test."; return 0; fi
+
+    echo "📊 Measuring impact of individual plugins (compared to '${base_time_s}' base time):"
+    echo "A larger positive 'Impact' suggests the plugin contributes more to the load time of this specific WP-CLI command."
+    echo "---------------------------------------------------------------------------------"; printf "%-40s | %-15s | %-15s\n" "Plugin Skipped" "Time w/ Skip" "Impact (Base-Skip)"; echo "---------------------------------------------------------------------------------"
+    local results=(); for plugin in "${active_plugins[@]}"; do
+        local time_with_skip_s; time_with_skip_s=$(_get_wp_execution_time plugin list --skip-plugins="$plugin")
+        if [[ -n "$time_with_skip_s" ]]; then
+            local diff_s; diff_s=$(awk -v base="${base_time_s%s}" -v skip="${time_with_skip_s%s}" 'BEGIN { printf "%.3f", base - skip }')
+            local impact_sign=""
+            if [[ $(awk -v diff="$diff_s" 'BEGIN { print (diff > 0) }') -eq 1 ]]; then
+                impact_sign="+"
+            fi
+            results+=("$(printf "%.3f" "$diff_s")|$plugin|$time_with_skip_s|${impact_sign}${diff_s}s")
+        else results+=("0.000|$plugin|Error|Error measuring"); fi
+    done
+
+    local sorted_results=()
+    while IFS= read -r line; do
+        sorted_results+=("$line")
+    done < <(printf "%s\n" "${results[@]}" | sort -t'|' -k1,1nr)
+
+    for result_line in "${sorted_results[@]}"; do
+        local p_name; p_name=$(echo "$result_line" | cut -d'|' -f2); local t_skip; t_skip=$(echo "$result_line" | cut -d'|' -f3); local i_str; i_str=$(echo "$result_line" | cut -d'|' -f4)
+        printf "%-40s | %-15s | %-15s\n" "$p_name" "$t_skip" "$i_str"
+    done
+    echo "---------------------------------------------------------------------------------";
+    echo ""; 
+    echo "✅ Test Complete"
+    echo "💡 Note: This measures impact on a specific WP-CLI command. For front-end or";
+    echo "   admin profiling, consider using a plugin like Query Monitor or New Relic.";
+    echo ""
+}
+
+# ----------------------------------------------------
+#  Detects plugins that are active but hidden from the standard plugin list.
+# ----------------------------------------------------
+function find_hidden_plugins() {
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    echo "🚀 Checking for hidden WordPress plugins..."
+
+    # Get the standard list of active plugins
+    local active_plugins
+    active_plugins=$("$WP_CLI_CMD" plugin list --field=name --status=active)
+
+    # Get the "raw" list of active plugins by skipping themes and other plugins
+    local active_plugins_raw
+    active_plugins_raw=$("$WP_CLI_CMD" plugin list --field=name --status=active --skip-themes --skip-plugins)
+
+    local regular_count
+    regular_count=$(echo "$active_plugins" | wc -l | xargs)
+    local raw_count
+    raw_count=$(echo "$active_plugins_raw" | wc -l | xargs)
+
+    # Compare the counts of the two lists.
+    if [[ "$regular_count" == "$raw_count" ]]; then
+        echo "✅ No hidden plugins detected. The standard and raw plugin lists match ($regular_count plugins)."
+        return 0
+    fi
+
+    # If the counts differ, find the plugins that are in the raw list but not the standard one.
+    echo "⚠️ Found a discrepancy between plugin lists!"
+    echo "   - Standard list shows: $regular_count active plugins."
+    echo "   - Raw list shows: $raw_count active plugins."
+    echo
+
+    # Use 'comm' to find lines unique to the raw list.
+    local hidden_plugins
+    hidden_plugins=$(comm -13 <(echo "$active_plugins" | sort) <(echo "$active_plugins_raw" | sort))
+
+    if [ -z "$hidden_plugins" ]; then
+        echo "ℹ️  Could not isolate the specific hidden plugins, but a discrepancy exists."
+    else
+        echo "--- Found Hidden Plugin(s) ---"
+        # Loop through each hidden plugin and get its details
+        while IFS= read -r plugin; do
+            if [ -z "$plugin" ]; then continue; fi
+
+            "$GUM_CMD" log --level warn "Details for: $plugin"
+            
+            # Get plugin details in CSV format and pipe to gum for a clean table printout.
+            "$WP_CLI_CMD" plugin get "$plugin" --skip-plugins --skip-themes --format=csv | \
+                "$GUM_CMD" table --separator "," --widths=15,0 --print
+            
+            echo
+        done <<< "$hidden_plugins"
+        echo "💡 These plugins are active but may be hidden from the admin view or standard WP-CLI list."
+        echo "   Common offenders are management plugins (like ManageWP's 'worker') or potentially malicious code."
+    fi
+}
+
+# ----------------------------------------------------
+#  Scans for potential malware and verifies WordPress core/plugin integrity.
+# ----------------------------------------------------
+function find_malware() {
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! command -v grep &> /dev/null; then echo "❌ Error: 'grep' command not found." >&2; return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    echo "🚀 Starting malware scan..."
+    echo "This process will check for suspicious code patterns and verify core/plugin file integrity."
+    echo
+
+    # --- 1. Hunt for suspicious PHP code ---
+    echo "--- Step 1/3: Searching for suspicious PHP code patterns... ---"
+    local suspicious_patterns=(
+        'eval(base64_decode('
+        'eval(gzinflate('
+        'eval(gzuncompress('
+        'eval(str_rot13('
+        'preg_replace.*\/e'
+        'create_function'
+        'FilesMan'
+        'c99shell'
+        'r57shell'
+        'shell_exec('
+        'passthru('
+        'system('
+        'phpinfo('
+        'assert('
+    )
+
+    local found_suspicious_files=false
+    local combined_pattern
+    combined_pattern=$(IFS='|'; echo "${suspicious_patterns[*]}")
+    local search_results
+    search_results=$(grep -rn --include='*.php' -iE "$combined_pattern" . 2>/dev/null)
+
+    if [ -n "$search_results" ]; then
+        echo "⚠️ Found potentially malicious code in the following files:"
+        echo "-----------------------------------------------------"
+        echo "$search_results"
+        echo "-----------------------------------------------------"
+        echo "💡 Review these files carefully. They may contain legitimate code that matches these patterns."
+        found_suspicious_files=true
+    else
+        echo "✅ No suspicious code patterns found."
+    fi
+    echo
+
+     # --- 2. Verify WordPress Core Checksums ---
+    echo "--- Step 2/3: Verifying WordPress core file integrity... ---"
+    if ! "$WP_CLI_CMD" core verify-checksums --skip-plugins --skip-themes; then
+        echo "⚠️ WordPress core verification failed. The files listed above may have been modified."
+    else
+        echo "✅ WordPress core files verified successfully."
+    fi
+    echo
+
+    # --- 3. Verify Plugin Checksums ---
+    echo "--- Step 3/3: Verifying plugin file integrity (from wordpress.org)... ---"
+    local stderr_file_plugin
+    stderr_file_plugin=$(mktemp)
+
+    local plugin_csv_data
+    plugin_csv_data=$("$WP_CLI_CMD" plugin verify-checksums --all --format=csv --skip-plugins --skip-themes --quiet 2> "$stderr_file_plugin")
+    local plugin_checksum_status=$?
+    
+    local plugin_summary_error
+    plugin_summary_error=$(cat "$stderr_file_plugin")
+    rm "$stderr_file_plugin"
+
+    if [ $plugin_checksum_status -ne 0 ]; then
+        echo "⚠️ Plugin verification encountered an error or found mismatches."
+
+        # Check if there is any CSV data to display
+        if [[ -n "$plugin_csv_data" ]]; then
+            echo "$plugin_csv_data" | "$GUM_CMD" table --separator "," --print
+        fi
+        
+        # Display the summary error if it exists
+        if [ -n "$plugin_summary_error" ]; then
+            echo "$plugin_summary_error"
+        fi
+        echo "💡 This may include plugins not in the wordpress.org directory (premium plugins) or modified files."
+    else
+        echo "✅ All plugins from wordpress.org verified successfully."
+    fi
+    echo
+
+    echo "✅ Malware scan complete."
+}
+
+# ----------------------------------------------------
+#  Finds outdated or invalid PHP opening tags in PHP files.
+# ----------------------------------------------------
+function find_outdated_php_tags() {
+    local search_dir="${1:-.}"
+
+    #  Ensure the search directory ends with a slash for consistency
+    if [[ "${search_dir: -1}" != "/" ]]; then
+        search_dir+="/"
+    fi
+
+    if [ ! -d "$search_dir" ]; then
+        echo "❌ Error: Directory '$search_dir' not found." >&2
+        return 1
+    fi
+
+    echo "🚀 Searching for outdated PHP tags in '${search_dir}'..."
+    echo "This can take a moment for large directories."
+    echo
+
+    # This new, more portable method first finds all lines with '<?',
+    # then filters out the lines containing valid tags like '<?php', '<?=', or '<?xml'.
+    # This avoids reliance on potentially unsupported 'grep -P' features.
+    local initial_results
+    initial_results=$(grep --include="*.php" --line-number --recursive '<?' "$search_dir" 2>/dev/null \
+        | grep -v -F -e '<?php' -e '<?=' -e '<?xml' \
+        | grep --color=always -e '<?' -e '$^'
+    )
+
+    # Filter out common false positives from comments, strings, etc.
+    local found_tags
+    found_tags=$(echo "$initial_results" \
+        | grep -v -F -e "strpos(" -e "str_replace(" \
+        | grep -v -E "^[^:]*:[^:]*:\s*(\*|//|#)|'\<\?'|\"\<\?\"" \
+    )
+
+    if [ -z "$found_tags" ]; then
+        echo "✅ No outdated PHP tags were found (after filtering common false positives)."
+    else
+        echo "⚠️ Found potentially outdated PHP tags in the following files:"
+        echo "-----------------------------------------------------"
+        #  The output from grep is already well-formatted.
+        echo "$found_tags"
+        echo "-----------------------------------------------------"
+        #  Use single quotes instead of backticks to prevent command execution.
+        echo "Recommendation: Replace all short tags like '<?' with the full '<?php' tag."
+    fi
+}
+# ----------------------------------------------------
+#  Applies HTTPS to a WordPress site's URLs.
+# ----------------------------------------------------
+function run_https() {
+    echo "🚀 Applying HTTPS to site URLs..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "❌ Error: gum is required for interactive prompts." >&2; return 1; fi
+
+    # --- Get Base Domain ---
+    # Strips http/https and www to get a clean domain name.
+    local domain
+    domain=$("$WP_CLI_CMD" option get home)
+    domain=${domain/http:\/\/www./}
+    domain=${domain/https:\/\/www./}
+    domain=${domain/http:\/\//}
+    domain=${domain/https:\/\//}
+    # Trim whitespace just in case
+    domain=$( echo "$domain" | awk '{$1=$1};1' )
+
+    # --- Ask User Preference for 'www' ---
+    local use_www=false
+    # Ask the user, with "No" as the default option.
+    # If they select "Yes" (exit code 0), then set use_www to true.
+    if "$GUM_CMD" confirm "Should the new HTTPS URL include 'www.'?" --default=false; then
+        use_www=true
+    fi
+
+    # --- Define Target URLs ---
+    local new_url
+    local new_url_escaped
+    if [ "$use_www" = true ]; then
+        new_url="https://www.$domain"
+        new_url_escaped="https:\/\/www.$domain"
+    else
+        new_url="https://$domain"
+        new_url_escaped="https:\/\/$domain"
+    fi
+
+    echo "This will update all URLs to use '$new_url'."
+    "$GUM_CMD" confirm "Proceed with search and replace?" || { echo "Operation cancelled by user."; return 0; }
+
+    # --- Run Replacements ---
+    echo "1/4: Replacing http://$domain ..."
+    "$WP_CLI_CMD" search-replace "http://$domain" "$new_url" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "2/4: Replacing http://www.$domain ..."
+    "$WP_CLI_CMD" search-replace "http://www.$domain" "$new_url" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "3/4: Replacing escaped http:\/\/$domain ..."
+    "$WP_CLI_CMD" search-replace "http:\/\/$domain" "$new_url_escaped" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "4/4: Replacing escaped http:\/\/www.$domain ..."
+    "$WP_CLI_CMD" search-replace "http:\/\/www.$domain" "$new_url_escaped" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "Flushing WordPress cache..."
+    "$WP_CLI_CMD" cache flush
+
+    echo ""
+    echo "✅ HTTPS migration complete! All URLs updated to '$new_url'."
+}
+
+# ----------------------------------------------------
+#  Installs helper and premium plugins.
+# ----------------------------------------------------
+
+# ----------------------------------------------------
+#  Installs the Kinsta Must-Use plugin.
+# ----------------------------------------------------
+function install_kinsta_mu() {
+    local force_flag="$1"
+
+    # Check if this is a Kinsta environment unless --force is used
+    if [[ "$force_flag" != "true" ]]; then
+        if [ ! -f "/etc/update-motd.d/00-kinsta-welcome" ]; then
+            echo "ℹ️ This does not appear to be a Kinsta environment. Skipping installation." >&2
+            echo "   Use the --force flag to install anyway." >&2
+            return 0
+        fi
+    else
+        echo "✅ --force flag detected. Skipping Kinsta environment check."
+    fi
+
+    echo "🚀 Installing Kinsta MU plugin..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! command -v wget &>/dev/null; then echo "❌ Error: wget not found." >&2; return 1; fi
+    if ! command -v unzip &>/dev/null; then echo "❌ Error: unzip not found." >&2; return 1; fi
+
+    # Get wp-content path dynamically for reliability
+    local wp_content_dir
+    wp_content_dir=$("$WP_CLI_CMD" eval "echo rtrim(WP_CONTENT_DIR, '/');" --skip-plugins --skip-themes 2>/dev/null)
+    if [ -z "$wp_content_dir" ] || [ ! -d "$wp_content_dir" ]; then
+        echo "❌ Error: Could not determine wp-content directory." >&2
+        return 1
+    fi
+    
+    local mu_plugins_dir="${wp_content_dir}/mu-plugins"
+    if [ ! -d "$mu_plugins_dir" ]; then
+        echo "Creating directory: $mu_plugins_dir"
+        mkdir -p "$mu_plugins_dir"
+    fi
+
+    # --- Installation ---
+    local kinsta_zip_file="kinsta-mu-plugins.zip"
+    
+    # Download to the private directory to avoid clutter
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        return 1
+    fi
+    local temp_zip_path="${private_dir}/${kinsta_zip_file}"
+
+    if wget -q https://kinsta.com/kinsta-tools/kinsta-mu-plugins.zip -O "$temp_zip_path"; then
+        unzip -o -q "$temp_zip_path" -d "$mu_plugins_dir/"
+        rm "$temp_zip_path"
+        echo "✅ Kinsta MU plugin installed successfully to ${mu_plugins_dir}/."
+    else
+        echo "❌ Error: Could not download the Kinsta MU plugin."
+        # Clean up failed download
+        [ -f "$temp_zip_path" ] && rm "$temp_zip_path"
+        return 1
+    fi
+}
+
+# ----------------------------------------------------
+#  Installs the CaptainCore Helper plugin.
+# ----------------------------------------------------
+function install_helper() {
+    echo "🚀 Deploying CaptainCore Helper..."
+
+    # --- Pre-flight Checks ---
+    if ! command -v curl &>/dev/null; then echo "❌ Error: curl not found." >&2; return 1; fi
+
+    # --- Deployment ---
+    if curl -sSL https://run.captaincore.io/deploy-helper | bash -s; then
+        echo "✅ CaptainCore Helper deployed successfully."
+    else
+        echo "❌ Error: Failed to deploy CaptainCore Helper."
+        return 1
+    fi
+}
+
+# ----------------------------------------------------
+#  Installs The Events Calendar Pro.
+# ----------------------------------------------------
+function install_events_calendar_pro() {
+    echo "🚀 Installing The Events Calendar Pro..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "Aborting: gum setup failed." >&2; return 1; fi
+    
+    # --- Get License Key ---
+    local license_key
+    license_key=$("$GUM_CMD" input --placeholder="Enter Events Calendar Pro license key..." --password)
+
+    if [ -z "$license_key" ]; then
+        echo "❌ No license key provided. Aborting installation." >&2
+        return 1
+    fi
+
+    # --- Installation Steps ---
+    echo "Step 1/3: Installing 'The Events Calendar' (free version)..."
+    if ! "$WP_CLI_CMD" plugin install the-events-calendar --force --activate; then
+        echo "❌ Error: Failed to install the free version of The Events Calendar." >&2
+        return 1
+    fi
+
+    echo "Step 2/3: Saving license key..."
+    if ! "$WP_CLI_CMD" option update pue_install_key_events_calendar_pro "$license_key"; then
+        echo "❌ Error: Failed to save the license key to the database." >&2
+        return 1
+    fi
+
+    echo "Step 3/3: Installing 'Events Calendar Pro'..."
+    local pro_plugin_url="https://pue.tri.be/api/plugins/v2/download?plugin=events-calendar-pro&key=$license_key"
+    if ! "$WP_CLI_CMD" plugin install "$pro_plugin_url" --force --activate; then
+        echo "❌ Error: Failed to install Events Calendar Pro. Please check your license key." >&2
+        return 1
+    fi
+
+    echo "✅ The Events Calendar Pro installed and activated successfully."
+}
+# ----------------------------------------------------
+#  Launches site - updates url from dev to live,
+#  enables search engine visibility, and clears cache.
+# ----------------------------------------------------
+function run_launch() {
+    # The domain is passed as the first argument, skip_confirm as the second
+    local domain="$1"
+    local skip_confirm="$2"
+
+    echo "🚀 Launching Site"
+
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then echo "❌ Error: gum is required for interactive prompts." >&2; return 1; fi
+
+    # --- Get New Domain ---
+    if [ -z "$domain" ]; then
+        # If no argument is passed, prompt interactively
+        domain=$("$GUM_CMD" input --placeholder "Enter the new live domain (e.g., example.com)...")
+    else
+        # If an argument is passed, just confirm the value
+        echo "Using provided domain: $domain"
+    fi
+
+    if [ -z "$domain" ]; then
+        echo "No domain entered. Launch cancelled."
+        return 1
+    fi
+
+    # --- Get Current Domain ---
+    local current_domain
+    current_domain=$("$WP_CLI_CMD" option get home --skip-plugins --skip-themes)
+    # Strip protocols
+    current_domain=${current_domain/http:\/\//}
+    current_domain=${current_domain/https:\/\//}
+    # Trim whitespace
+    current_domain=$(echo "$current_domain" | awk '{$1=$1};1')
+
+    if [[ -z "$current_domain" ]] || [[ "$current_domain" != *"."* ]]; then
+        echo "❌ Error: Could not find a valid existing domain from the WordPress installation." >&2
+        return 1
+    fi
+
+    if [[ "$current_domain" == "$domain" ]]; then
+        echo "The new domain is the same as the current domain. No changes needed."
+        return 0
+    fi
+
+    # --- Confirmation ---
+    # Only ask for confirmation if the skip_confirm flag is not true
+    if [[ "$skip_confirm" != "true" ]]; then
+        echo "This will update the site URL from '$current_domain' to '$domain'."
+        "$GUM_CMD" confirm "Proceed with launch?" || { echo "Operation cancelled by user."; return 0; }
+    fi
+
+    # --- Run URL Replacements ---
+    echo "1/2: Running search and replace for URLs..."
+    "$WP_CLI_CMD" search-replace "//$current_domain" "//$domain" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    echo "2/2: Running search and replace for escaped URLs..."
+    "$WP_CLI_CMD" search-replace "\/\/${current_domain}" "\/\/$domain" --all-tables --skip-plugins --skip-themes --report-changed-only
+
+    # --- Final Steps ---
+    echo "Enabling search engine visibility..."
+    "$WP_CLI_CMD" option update blog_public 1 --skip-plugins --skip-themes
+
+    echo "Flushing WordPress cache..."
+    "$WP_CLI_CMD" cache flush
+
+    # Check for Kinsta environment and purge cache if present
+    if [ -f "/etc/update-motd.d/00-kinsta-welcome" ] || [[ "$current_domain" == *"kinsta"* ]]; then
+        echo "Kinsta environment detected. Purging Kinsta cache..."
+        "$WP_CLI_CMD" kinsta cache purge --all
+    fi
+
+    echo ""
+    echo "✅ Site launch complete! The new domain is '$domain'."
+}
+
 # ----------------------------------------------------
 #  Migrates a site from a backup URL or local file.
 #  Arguments:
@@ -2948,69 +4249,17 @@ function monitor_error_log() {
     done
 }
 # ----------------------------------------------------
-#  Finds outdated or invalid PHP opening tags in PHP files.
+#  Reset Commands
+#  Handles resetting WordPress components or permissions.
 # ----------------------------------------------------
-function find_outdated_php_tags() {
-    local search_dir="${1:-wp-content/}"
 
-    #  Ensure the search directory ends with a slash for consistency
-    if [[ "${search_dir: -1}" != "/" ]]; then
-        search_dir+="/"
-    fi
-
-    if [ ! -d "$search_dir" ]; then
-        echo "❌ Error: Directory '$search_dir' not found." >&2
-        return 1
-    fi
-
-    echo "🚀 Searching for outdated PHP tags in '${search_dir}'..."
-    echo "This can take a moment for large directories."
-    echo
-
-    #  Use a more precise regex to find '<?' that is NOT followed by 'php', 'xml', or '='.
-    #  This avoids false positives for XML declarations and valid short echo tags.
-    #  The '-i' flag makes the 'php' and 'xml' check case-insensitive.
-    #  The '-P' flag enables Perl-compatible regular expressions (PCRE) for the negative lookahead.
-    local initial_results
-    initial_results=$(grep --include="*.php" --line-number --recursive -iP '<\?(?!php|xml|=)' "$search_dir" 2>/dev/null)
-
-    # Filter out common false positives from comments and string functions.
-    # This is not a perfect solution, but it significantly reduces noise.
-    # It removes lines starting with *, lines containing // or # comments,
-    # and lines where '<?' is found inside quotes or in common string functions.
-    local found_tags
-    found_tags=$(echo "$initial_results" \
-        | grep -v -F -e "strpos(" -e "str_replace(" \
-        | grep -v -E "^\s*\*|\s*//|\s*#|'\<\?'|\"\<\?\"" \
-    )
-
-    if [ -z "$found_tags" ]; then
-        echo "✅ No outdated PHP tags were found (after filtering common false positives)."
-    else
-        echo "⚠️ Found potentially outdated PHP tags in the following files:"
-        echo "-----------------------------------------------------"
-        #  The output from grep is already well-formatted.
-        echo "$found_tags"
-        echo "-----------------------------------------------------"
-        #  Use single quotes instead of backticks to prevent command execution.
-        echo "Recommendation: Replace all short tags like '<?' with the full '<?php' tag."
-    fi
-}
-# ----------------------------------------------------
-#  Resets file and folder permissions to common defaults (755 for dirs, 644 for files).
-# ----------------------------------------------------
-function reset_permissions() {
-    echo "Resetting file and folder permissions to defaults"
-    find . -type d -exec chmod 755 {} \;
-    find . -type f -exec chmod 644 {} \;
-    echo "✅ Permissions have been reset."
-}
 # ----------------------------------------------------
 #  Resets the WordPress installation to a clean, default state.
 # ----------------------------------------------------
-function reset_site() {
-    local admin_user="$1"
-    local admin_email="$2"
+function reset_wp() {
+    # This function now only accepts an optional email flag.
+    # The admin user is selected interactively.
+    local admin_email="$1"
 
     # --- Pre-flight Checks ---
     if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
@@ -3018,8 +4267,30 @@ function reset_site() {
     if ! command -v wget &>/dev/null; then echo "❌ Error: wget not found." >&2; return 1; fi
     if ! command -v unzip &>/dev/null; then echo "❌ Error: unzip not found." >&2; return 1; fi
     if ! command -v curl &>/dev/null; then echo "❌ Error: curl not found." >&2; return 1; fi
+    if ! setup_gum; then echo "❌ Error: gum is required for the interactive admin picker." >&2; return 1; fi
 
     echo "🚀 Starting WordPress Site Reset 🚀"
+
+    # --- Interactively Select Admin User ---
+    echo "Fetching list of administrators..."
+    local admin_users
+    admin_users=$("$WP_CLI_CMD" user list --role=administrator --field=user_login --format=csv)
+    
+    if [ -z "$admin_users" ]; then
+        echo "❌ Error: No administrator users found to assign to the new installation." >&2
+        return 1
+    fi
+
+    local admin_user
+    admin_user=$(echo "$admin_users" | "$GUM_CMD" choose --header "Select an administrator for the new installation")
+
+    if [ -z "$admin_user" ]; then
+        echo "No administrator selected. Aborting reset."
+        return 0
+    fi
+    echo "✅ Selected administrator: $admin_user"
+    # --- End Select Admin User ---
+
     echo "This is a destructive operation."
     # A 3-second countdown to allow the user to abort (Ctrl+C)
     for i in {3..1}; do echo -n "Continuing in $i... "; sleep 1; done; echo
@@ -3028,10 +4299,10 @@ function reset_site() {
     local url; url=$( "$WP_CLI_CMD" option get home --skip-plugins --skip-themes )
     local title; title=$( "$WP_CLI_CMD" option get blogname --skip-plugins --skip-themes )
 
-    # If admin_email is not supplied, get it from the current installation
+    # If admin_email flag is not supplied, get it from the selected user.
     if [ -z "$admin_email" ]; then
-        admin_email=$("$WP_CLI_CMD" option get admin_email --skip-plugins --skip-themes)
-        echo "ℹ️ Admin email not provided. Using existing email: $admin_email"
+        admin_email=$("$WP_CLI_CMD" user get "$admin_user" --field=user_email --format=csv)
+        echo "ℹ️ Admin email not provided. Using email from selected user '$admin_user': $admin_email"
     fi
 
     # --- Perform Reset ---
@@ -3054,7 +4325,7 @@ function reset_site() {
     latest_default_theme=$("$WP_CLI_CMD" theme search twenty --field=slug --per-page=1 --quiet --skip-plugins --skip-themes)
 
     if [ $? -ne 0 ] || [ -z "$latest_default_theme" ]; then
-      echo "❌ Error: Could not determine the latest default theme. Aborting reset." >&2
+      echo "❌ Error: Could not determine the latest default theme. Aborting reset."
       return 1
     fi
     echo "✅ Latest default theme is '$latest_default_theme'."
@@ -3068,80 +4339,26 @@ function reset_site() {
     mkdir -p wp-content/uploads/
 
     echo "Step 9/9: Installing helper plugins (Kinsta MU, CaptainCore Helper)..."
-    if wget -q https://kinsta.com/kinsta-tools/kinsta-mu-plugins.zip; then
-        unzip -q kinsta-mu-plugins.zip -d wp-content/mu-plugins/
-        rm kinsta-mu-plugins.zip
-        echo "✅ Kinsta MU plugin installed."
-    else
-        echo "⚠️ Warning: Could not download Kinsta MU plugin."
-    fi
-
-    if curl -sSL https://run.captaincore.io/deploy-helper | bash -s; then
-        echo "✅ CaptainCore Helper deployed."
-    else
-        echo "⚠️ Warning: Could not deploy CaptainCore Helper."
-    fi
+    # The install_kinsta_mu function will automatically check if it's a Kinsta env.
+    install_kinsta_mu
+    install_helper
 
     echo ""
     echo "✅ WordPress reset complete!"
     echo "   URL: $url"
     echo "   Admin User: $admin_user"
 }
+
 # ----------------------------------------------------
-#  Identifies plugins that may be slowing down WP-CLI command execution.
+#  Resets file and folder permissions to common defaults (755 for dirs, 644 for files).
 # ----------------------------------------------------
-function identify_slow_plugins() {
-    _get_wp_execution_time() { local output; output=$("$WP_CLI_CMD" "$@" --debug 2>&1); echo "$output" | perl -ne '/Debug \(bootstrap\): Running command: .+\(([^s]+s)/ && print $1'; }
-    if ! setup_wp_cli; then echo "❌ Error: WP-CLI (wp command) not found." >&2; return 1; fi
-    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
-
-    echo "🚀 WordPress Plugin Performance Test 🚀"
-    echo "This script measures the execution time of 'wp plugin list --debug' under various conditions."
-    echo ""
-    echo "📋 Initial Baseline Measurements for 'wp plugin list --debug':"
-
-    local time_no_theme_s; printf "  ⏳ Measuring time with NO themes loaded (--skip-themes)... "; time_no_theme_s=$(_get_wp_execution_time plugin list --skip-themes); echo "Time: $time_no_theme_s"
-    local time_no_plugins_s; printf "  ⏳ Measuring time with NO plugins loaded (--skip-plugins)... "; time_no_plugins_s=$(_get_wp_execution_time plugin list --skip-plugins); echo "Time: $time_no_plugins_s"
-    local base_time_s; printf "  ⏳ Measuring base time (ALL plugins & theme active)... "; base_time_s=$(_get_wp_execution_time plugin list)
-    if [[ -z "$base_time_s" ]]; then echo "❌ Error: Could not measure base execution time." >&2; return 1; fi;
-    echo "Base time: $base_time_s"
-    echo ""
-
-    local active_plugins=()
-    while IFS= read -r line; do
-        active_plugins+=("$line")
-    done < <("$WP_CLI_CMD" plugin list --field=name --status=active)
-
-    if [[ ${#active_plugins[@]} -eq 0 ]]; then echo "ℹ️ No active plugins found to test."; return 0; fi
-
-    echo "📊 Measuring impact of individual plugins (compared to '${base_time_s}' base time):"
-    echo "A larger positive 'Impact' suggests the plugin contributes more to the load time of this specific WP-CLI command."
-
-    echo "---------------------------------------------------------------------------------"; printf "%-40s | %-15s | %-15s\n" "Plugin Skipped" "Time w/ Skip" "Impact (Base-Skip)"; echo "---------------------------------------------------------------------------------"
-    local results=(); for plugin in "${active_plugins[@]}"; do
-        local time_with_skip_s; time_with_skip_s=$(_get_wp_execution_time plugin list --skip-plugins="$plugin")
-        if [[ -n "$time_with_skip_s" ]]; then
-            local diff_s; diff_s=$(awk -v base="${base_time_s%s}" -v skip="${time_with_skip_s%s}" 'BEGIN { printf "%.3f", base - skip }')
-            local impact_sign=""
-            if [[ $(awk -v diff="$diff_s" 'BEGIN { print (diff > 0) }') -eq 1 ]]; then
-                impact_sign="+"
-            fi
-            results+=("$(printf "%.3f" "$diff_s")|$plugin|$time_with_skip_s|${impact_sign}${diff_s}s")
-        else results+=("0.000|$plugin|Error|Error measuring"); fi
-    done
-
-    local sorted_results=()
-    while IFS= read -r line; do
-        sorted_results+=("$line")
-    done < <(printf "%s\n" "${results[@]}" | sort -t'|' -k1,1nr)
-
-    for result_line in "${sorted_results[@]}"; do
-        local p_name; p_name=$(echo "$result_line" | cut -d'|' -f2); local t_skip; t_skip=$(echo "$result_line" | cut -d'|' -f3); local i_str; i_str=$(echo "$result_line" | cut -d'|' -f4)
-        printf "%-40s | %-15s | %-15s\n" "$p_name" "$t_skip" "$i_str"
-    done
-    echo "---------------------------------------------------------------------------------"; echo ""; echo "✅ Test Complete"
-    echo "💡 Note: This measures impact on a specific WP-CLI command. For front-end or"; echo "   admin profiling, consider using a plugin like Query Monitor or New Relic."; echo ""
+function reset_permissions() {
+    echo "Resetting file and folder permissions to defaults"
+    find . -type d -exec chmod 755 {} \;
+    find . -type f -exec chmod 644 {} \;
+    echo "✅ Permissions have been reset."
 }
+
 # ----------------------------------------------------
 #  Deactivates a suspend message by removing the mu-plugin.
 # ----------------------------------------------------
@@ -3633,6 +4850,1132 @@ echo json_encode($simple_list, JSON_PRETTY_PRINT);
     echo "✅ Update process complete."
 }
 
+# ----------------------------------------------------
+#  Upgrades the _do script to the latest version.
+# ----------------------------------------------------
+function run_upgrade() {
+    echo "🚀 Checking for the latest version of _do..."
+
+    # --- Pre-flight Checks ---
+    if ! command -v curl &> /dev/null; then echo "❌ Error: curl is required for upgrades." >&2; return 1; fi
+    if ! command -v grep &> /dev/null; then echo "❌ Error: grep is required for upgrades." >&2; return 1; fi
+    if ! command -v realpath &> /dev/null; then echo "❌ Error: realpath is required for upgrades." >&2; return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    # --- Download latest version to a temporary file ---
+    local upgrade_url="https://github.com/CaptainCore/do/releases/latest/download/_do.sh"
+    local temp_file
+    temp_file=$(mktemp)
+    if ! curl -sL "$upgrade_url" -o "$temp_file"; then
+        echo "❌ Error: Failed to download the latest version from $upgrade_url" >&2
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    # --- Extract version numbers ---
+    local new_version
+    new_version=$(grep 'CAPTAINCORE_DO_VERSION=' "$temp_file" | head -n1 | cut -d'"' -f2)
+
+    if [ -z "$new_version" ]; then
+        echo "❌ Error: Could not determine the version number from the downloaded file." >&2
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    local current_version="$CAPTAINCORE_DO_VERSION"
+    echo "   - Current version: $current_version"
+    echo "   - Latest version:  $new_version"
+
+    # --- Determine install path & type ---
+    local install_path
+    local current_script_path
+    local is_system_install=false
+    
+    # Try to determine the path of the running script
+    current_script_path=$(realpath "$0" 2>/dev/null)
+
+    # Check if the script is running from a common system binary path
+    if [[ -n "$current_script_path" && -f "$current_script_path" ]]; then
+        if [[ "$current_script_path" == /usr/local/bin/* || "$current_script_path" == /usr/bin/* || "$current_script_path" == /bin/* ]]; then
+            is_system_install=true
+        fi
+    fi
+
+    # --- Handle Different Scenarios ---
+    if [[ "$is_system_install" == "true" ]]; then
+        # --- UPGRADE SCENARIO for an existing system install ---
+        echo "   - Found existing system installation at: $current_script_path"
+        install_path="$current_script_path"
+
+        local latest_available
+        latest_available=$(printf '%s\n' "$new_version" "$current_version" | sort -V | tail -n1)
+        
+        if [[ "$new_version" == "$current_version" ]]; then
+            echo "✅ You are already using the latest version ($current_version)."
+            if ! "$GUM_CMD" confirm "Do you want to reinstall it anyway?"; then
+                rm -f "$temp_file"
+                return 0
+            fi
+        elif [[ "$latest_available" == "$current_version" ]]; then
+             echo "✅ You are running a newer version ($current_version) than the latest release ($new_version). No action taken."
+             rm -f "$temp_file"
+             return 0
+        fi
+        echo "   - Upgrading to version $new_version..."
+
+    else
+        # --- NEW INSTALL SCENARIO (for dev scripts or curl|bash) ---
+        if [[ -n "$current_script_path" && -f "$current_script_path" ]]; then
+            echo "   - Running from a local script. Treating as a new system-wide installation."
+        else
+             echo "   - No physical script found. Treating as a new system-wide installation."
+        fi
+        
+        install_path="/usr/local/bin/_do"
+        echo "   - Target install location: $install_path"
+
+        # If the target already exists, check its version to avoid unnecessary work
+        if [ -f "$install_path" ]; then
+            local existing_install_version
+            existing_install_version=$(grep 'CAPTAINCORE_DO_VERSION=' "$install_path" | head -n1 | cut -d'"' -f2)
+            if [[ "$new_version" == "$existing_install_version" ]]; then
+                echo "✅ The latest version ($new_version) is already installed at $install_path. No action taken."
+                rm -f "$temp_file"
+                return 0
+            fi
+        fi
+    fi
+    
+    # --- Perform the installation/upgrade ---
+    echo "   - Installing to $install_path..."
+
+    # Make the downloaded script executable
+    chmod +x "$temp_file"
+
+    # Check for write permissions and use sudo if needed
+    if [ -w "$(dirname "$install_path")" ]; then
+        if ! mv "$temp_file" "$install_path"; then
+            echo "❌ Error: Failed to move the new version to $install_path." >&2
+            rm -f "$temp_file" # Clean up temp file on failure
+            return 1
+        fi
+    else
+        echo "   - Write permission is required for the directory $(dirname "$install_path")."
+        echo "   - You may be prompted for your password to complete the installation."
+        if ! sudo mv "$temp_file" "$install_path"; then
+            echo "❌ Error: sudo command failed. Could not complete installation/upgrade." >&2
+            rm -f "$temp_file" # Clean up temp file on failure
+            return 1
+        fi
+    fi
+
+    echo "✅ Success! _do version $new_version is now installed at $install_path."
+}
+# ----------------------------------------------------
+#  Performs a full site backup to a Restic repository on B2.
+#  Credentials can be injected via environment variables or piped via stdin.
+# ----------------------------------------------------
+function vault_create() {
+    echo "🚀 Starting secure snapshot to Restic B2 repository..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_restic; then return 1; fi
+    if ! setup_wp_cli; then return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then
+        echo "❌ Error: This does not appear to be a WordPress installation." >&2
+        return 1
+    fi
+
+    # --- Setup Restic Environment ---
+    if ! _setup_vault_env; then
+        return 1 # Error message printed in helper
+    fi
+
+    # --- Rclone Cache Size Check ---
+    if [ -n "$EMAIL_NOTIFY" ]; then
+        local rclone_cache_dir="$HOME/.cache/rclone"
+        if [ -d "$rclone_cache_dir" ]; then
+            local cache_size_bytes
+            cache_size_bytes=$(du -sb "$rclone_cache_dir" | awk '{print $1}')
+            local size_limit_bytes=10737418240 # 10 GB
+
+            if (( cache_size_bytes > size_limit_bytes )); then
+                local site_url
+                site_url=$("$WP_CLI_CMD" option get home)
+                local cache_size_gb
+                cache_size_gb=$(awk -v bytes="$cache_size_bytes" 'BEGIN { printf "%.2f", bytes / 1024 / 1024 / 1024 }')
+                
+                local email_subject="Rclone Cache Warning for ${site_url}"
+                local email_message="Warning: The rclone cache folder at ${rclone_cache_dir} is larger than 10GB. Current size: ${cache_size_gb}GB. This might cause issues with 'vault create' operations."
+                echo "   - ⚠️  Rclone cache is large (${cache_size_gb}GB). Sending email notification to $EMAIL_NOTIFY..."
+
+                "$WP_CLI_CMD" eval "wp_mail( '$EMAIL_NOTIFY', '$email_subject', '$email_message', ['Content-Type: text/html; charset=UTF-8'] );"
+            fi
+        fi
+    fi
+
+    # --- Check/Initialize Restic Repository ---
+    echo "   - Checking for repository at ${RESTIC_REPOSITORY}..."
+    if ! "$RESTIC_CMD" stats > /dev/null 2>&1; then
+        echo "   - Repository not found or is invalid. Attempting to initialize..."
+        if ! "$RESTIC_CMD" init; then
+            echo "❌ Error: Failed to initialize Restic repository." >&2
+            return 1
+        fi
+        echo "   - ✅ Repository initialized successfully."
+    else
+        echo "   - ✅ Repository found."
+    fi
+
+    # --- Create DB Dump in Private Directory ---
+    local private_dir
+    if ! private_dir=$(_get_private_dir); then
+        return 1
+    fi
+    local sql_file_path="${private_dir}/database-backup.sql"
+
+    echo "   - Generating database dump at: ${sql_file_path}"
+    if ! "$WP_CLI_CMD" db export "$sql_file_path" --add-drop-table --single-transaction --quick --max_allowed_packet=512M > /dev/null; then
+        echo "❌ Error: Database export failed." >&2
+        return 1
+    fi
+
+    # --- Move DB dump to root for snapshot ---
+    local wp_root_dir
+    wp_root_dir=$(realpath ".")
+    local temporary_sql_path_in_root="${wp_root_dir}/database-backup.sql"
+
+    echo "   - Temporarily moving database dump to web root for snapshotting."
+    if ! mv "$sql_file_path" "$temporary_sql_path_in_root"; then
+        echo "❌ Error: Could not move database dump to web root." >&2
+        return 1
+    fi
+
+    # --- Run Restic Backup ---
+    local original_dir
+    original_dir=$(pwd)
+    echo "   - Changing to WordPress root ($wp_root_dir) for clean snapshot paths..."
+    cd "$wp_root_dir" || {
+        echo "❌ Error: Could not change to WordPress root directory." >&2
+        echo "   - Attempting to move database dump back to private directory..."
+        mv "$temporary_sql_path_in_root" "$sql_file_path"
+        return 1
+    }
+    
+    local human_readable_size
+    human_readable_size=$(du -sh . | awk '{print $1}')
+    local tag_args=()
+    if [[ -n "$human_readable_size" ]]; then
+        tag_args+=(--tag "size:${human_readable_size}")
+    fi
+
+    echo "   - Backing up current directory (.), which now includes the SQL dump..."
+    if ! "$RESTIC_CMD" backup "." \
+        "${tag_args[@]}" \
+        --exclude '**.DS_Store' \
+        --exclude '*timthumb.txt' \
+        --exclude 'debug.log' \
+        --exclude 'error_log' \
+        --exclude 'phperror_log' \
+        --exclude 'wp-content/updraft' \
+        --exclude 'wp-content/cache' \
+        --exclude 'wp-content/et-cache' \
+        --exclude 'wp-content/.wps-slots' \
+        --exclude 'wp-content/wflogs' \
+        --exclude 'wp-content/uploads/sessions' \
+        --exclude 'wp-snapshots'; then
+        echo "❌ Error: Restic backup command failed." >&2
+        cd "$original_dir"
+        echo "   - Moving database dump back to private directory..."
+        mv "$temporary_sql_path_in_root" "$sql_file_path"
+        return 1
+    fi
+
+    # --- Cleanup: Move DB dump back to private directory ---
+    cd "$original_dir"
+    echo "   - Moving database dump back to private directory..."
+    mv "$temporary_sql_path_in_root" "$sql_file_path"
+
+    # Unset variables for security
+    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+
+    echo "✅ Vault snapshot complete!"
+}
+
+# ----------------------------------------------------
+#  (Helper) Reads credentials and sets up the restic environment.
+# ----------------------------------------------------
+function _setup_vault_env() {
+    # --- Read Credentials ---
+    local b2_bucket b2_path b2_key_id b2_app_key restic_password
+
+    # Prioritize stdin: If data is being piped in, read from it.
+    if ! [ -t 0 ]; then
+        read -r stdin_b2_bucket
+        read -r stdin_b2_path
+        read -r stdin_b2_key_id
+        read -r stdin_b2_app_key
+        read -r stdin_restic_password
+        
+        b2_bucket=${stdin_b2_bucket}
+        b2_path=${stdin_b2_path}
+        b2_key_id=${stdin_b2_key_id}
+        b2_app_key=${stdin_b2_app_key}
+        restic_password=${stdin_restic_password}
+    fi
+
+    # If stdin empty or incomplete, then attempt to load from environment variables.
+    if [ -z "$b2_bucket" ] || [ -z "$b2_path" ] || [ -z "$b2_key_id" ] || [ -z "$b2_app_key" ] || [ -z "$restic_password" ]; then
+        b2_bucket="$B2_BUCKET"
+        b2_path="$B2_PATH"
+        b2_key_id="$B2_ACCOUNT_ID"
+        b2_app_key="$B2_ACCOUNT_KEY"
+        restic_password="$RESTIC_PASSWORD"
+    fi
+
+    if [ -z "$b2_bucket" ] || [ -z "$b2_path" ] || [ -z "$b2_key_id" ] || [ -z "$b2_app_key" ] || [ -z "$restic_password" ]; then
+        echo "❌ Error: One or more required credentials were not provided or were empty." >&2
+        return 1
+    fi
+
+    export B2_ACCOUNT_ID="$b2_key_id"
+    export B2_ACCOUNT_KEY="$b2_app_key"
+    export RESTIC_PASSWORD="$restic_password"
+    export RESTIC_REPOSITORY="b2:${b2_bucket}:${b2_path}"
+
+    return 0
+}
+
+# ----------------------------------------------------
+#  (Helper) Caches the file list for a snapshot. 
+# ----------------------------------------------------
+function _cache_snapshot_files() {
+    local snapshot_id="$1"
+    local cache_file="$2"
+
+    # Show a spinner while caching the entire file list. 
+    if ! "$GUM_CMD" spin --spinner dot --title "Caching file list for snapshot ${snapshot_id}..." -- \
+        "$RESTIC_CMD" ls --json --long --recursive "${snapshot_id}" > "$cache_file"; 
+    then
+        echo "❌ Error: Could not cache the file list for snapshot ${snapshot_id}." 
+        >&2 
+        rm -f "$cache_file" # Clean up partial cache file 
+        return 1
+    fi
+    return 0
+}
+
+# ----------------------------------------------------
+#  (Helper) Provides an interactive menu for a selected file. 
+# ----------------------------------------------------
+function _file_action_menu() {
+    local snapshot_id="$1"
+    local file_path="$2"
+
+    local choice
+    choice=$("$GUM_CMD" choose "View Content" "Download File" "Restore File" "Back")
+
+    case "$choice" in
+        "View Content")
+            echo "📄 Viewing content of '$file_path'... (Press 'q' to quit)"
+            local temp_file
+            temp_file=$(mktemp) 
+ 
+           
+           if [ -z "$temp_file" ]; 
+           then
+                echo "❌ Error: Could not create a temporary file." 
+                >&2 
+                sleep 2
+                return
+            fi
+
+            # Dump the file content to the temporary file
+            if ! "$RESTIC_CMD" dump "${snapshot_id}" "${file_path}" > "$temp_file"; then 
+                echo "❌ Error: Could not dump file content from repository." 
+                >&2 
+                rm -f "$temp_file" 
+                sleep 2
+                return
+            fi
+            
+            # View the temporary file with less, ensuring it's interactive
+    
+             
+            less -RN "$temp_file" </dev/tty
+            
+            # Clean up the temporary file
+            rm -f "$temp_file"
+            ;; 
+        "Download File") 
+            local filename
+            filename=$(basename "$file_path") 
+            echo "⬇️ Downloading '$filename' to current directory..."
+            if "$GUM_CMD" confirm "Download '${filename}' to '$(pwd)'?"; 
+            then
+                if "$RESTIC_CMD" dump "${snapshot_id}" "${file_path}" > "$filename"; 
+                then
+                    local size
+                    size=$(ls -lh "$filename" | awk '{print $5}') 
+                    echo "✅ File downloaded: $filename ($size)"
+                else
+            
+                     
+                    echo "❌ Error: Failed to download file." 
+                    rm -f "$filename" 
+                fi
+            else
+                echo "Download cancelled." 
+            fi
+            "$GUM_CMD" input --placeholder="Press Enter to continue..." > /dev/null 
+            ;;
+        "Restore File") 
+            echo "🔄 Restoring '$file_path' to current directory..."
+            if "$GUM_CMD" confirm "Restore '${file_path}' to '$(pwd)'?"; 
+            then
+                if "$RESTIC_CMD" restore "${snapshot_id}" --include "${file_path}" --target "."; 
+                then
+                    echo "✅ File restored successfully." 
+                else
+                    echo "❌ Error: Failed to restore file." 
+                fi
+            else
+                echo "Restore cancelled." 
+            fi
+            # Add a pause so the user can see the result before returning to the browser. 
+            "$GUM_CMD" input --placeholder="Press Enter to continue..." > /dev/null 
+            ;;
+        "Back") 
+            return
+            ;;
+        *) 
+    esac
+}
+
+# ----------------------------------------------------
+#  (Helper) Handles the download/restore of a full folder.
+# ----------------------------------------------------
+function _download_folder_action() {
+    local snapshot_id="$1"
+    local folder_path_in_repo="$2"
+
+    echo "📦 Preparing to download folder: '${folder_path_in_repo}'"
+    echo "This action will restore the selected folder and its full directory structure from the snapshot's root into your current working directory."
+    echo "For example, restoring '/wp-content/plugins/' will create the path './wp-content/plugins/' here."
+
+    if "$GUM_CMD" confirm "Proceed with restoring '${folder_path_in_repo}' to '$(pwd)'?"; then
+        echo "   - Restoring files..."
+        if "$RESTIC_CMD" restore "${snapshot_id}" --include "${folder_path_in_repo}" --target "."; then
+            echo "✅ Folder and its contents restored successfully."
+        else
+            echo "❌ Error: Failed to restore folder."
+        fi
+    else
+        echo "Download cancelled."
+    fi
+    "$GUM_CMD" input --placeholder="Press Enter to continue..." > /dev/null
+}
+
+# ----------------------------------------------------
+#  (Helper) Provides an interactive file browser for a snapshot.
+# ----------------------------------------------------
+function _browse_snapshot() {
+    local snapshot_id="$1"
+    local cache_file="$2"
+    local current_path="/"
+
+    while true;
+    do
+        clear
+        echo "🗂  Browse Snapshot: ${snapshot_id} | Path: ${current_path}"
+
+        # PHP script to parse the cached JSON and format it for the current directory
+        local php_parser_code='
+<?php
+$cache_file = $argv[1] ?? "";
+$current_path = $argv[2] ?? "/";
+
+if (!file_exists($cache_file)) {
+    fwrite(STDERR, "Cache file not found.\n");
+    exit(1);
+}
+
+$file_content = file_get_contents($cache_file);
+$lines = explode("\n", trim($file_content));
+
+$items_in_current_dir = [];
+$dirs_in_current_dir = [];
+
+foreach ($lines as $line) {
+    if (empty($line)) continue;
+    $item = json_decode($line, true);
+    if (json_last_error() !== JSON_ERROR_NONE || !isset($item["path"])) continue;
+
+    $item_path = $item["path"];
+
+    if (strpos($item_path, $current_path) !== 0) continue;
+
+    $relative_path = substr($item_path, strlen($current_path));
+    if (empty($relative_path)) continue;
+
+    if (strpos($relative_path, "/") === false) {
+        if ($item["type"] === "dir") {
+            $dirs_in_current_dir[$relative_path] = true;
+        } else {
+            $items_in_current_dir[$relative_path] = $item;
+        }
+    } else {
+        $dir_name = explode("/", $relative_path)[0];
+        $dirs_in_current_dir[$dir_name] = true;
+    }
+}
+
+ksort($dirs_in_current_dir);
+ksort($items_in_current_dir);
+
+if ($current_path !== "/") {
+    echo "⤴️ ../ (Up one level)|up|..\n";
+}
+
+foreach (array_keys($dirs_in_current_dir) as $dir) {
+    echo "📁 " . $dir . "/|dir|" . $dir . "\n";
+}
+
+foreach ($items_in_current_dir as $name => $item) {
+    $size_bytes = $item["size"] ?? 0;
+    $size_formatted = "0 B";
+    if ($size_bytes >= 1048576) { $size_formatted = round($size_bytes / 1048576, 2) . " MB"; }
+    elseif ($size_bytes >= 1024) { $size_formatted = round($size_bytes / 1024, 2) . " KB"; }
+    elseif ($size_bytes > 0) { $size_formatted = $size_bytes . " B"; }
+    echo "📄 " . $name . " (" . $size_formatted . ")|file|" . $name . "\n";
+}
+
+echo "\n";
+echo "💾 Download this directory ({$current_path})|download_dir|.\n";
+'
+        # Execute PHP script to get a formatted list from the cache
+        local temp_script_file;
+        temp_script_file=$(mktemp)
+        echo "$php_parser_code" > "$temp_script_file"
+        local formatted_list;
+        formatted_list=$(php -f "$temp_script_file" "$cache_file" "$current_path")
+        rm "$temp_script_file"
+
+        # --- Display and selection logic ---
+        local display_items=()
+        local data_items=()
+
+        while IFS='|'
+        read -r display_part type_part name_part; do
+            if [ -z "$display_part" ];
+            then continue; fi
+            display_items+=("$display_part")
+            data_items+=("${type_part}|${name_part}")
+        done <<< "$formatted_list"
+
+         local selected_display
+        # Use a for loop to pipe items to gum filter, avoiding argument list limits.
+        selected_display=$(
+            for item in "${display_items[@]}"; do
+                echo "$item"
+            done | "$GUM_CMD" filter --height=20 --prompt="👇 Select a snapshot to browse" --indicator="→" --placeholder=""
+        )
+
+        if [ -z "$selected_display" ];
+        then
+            return # Exit the browser
+        fi
+
+        local selected_index=-1
+        for i in "${!display_items[@]}";
+        do
+           if [[ "${display_items[$i]}" == "$selected_display" ]];
+           then
+               selected_index=$i
+               break
+           fi
+        done
+
+        if [ "$selected_index" -eq -1 ];
+        then continue; fi
+
+        local selected_data="${data_items[selected_index]}"
+        local item_type;
+        item_type=$(echo "$selected_data" | cut -d'|' -f1)
+        local item_name;
+        item_name=$(echo "$selected_data" | cut -d'|' -f2)
+
+        case "$item_type" in
+            "dir")
+                current_path="${current_path}${item_name}/"
+                ;;
+            "file")
+                _file_action_menu "${snapshot_id}" "${current_path}${item_name}"
+                ;;
+            "up")
+                if [[ "$current_path" != "/" ]]; then
+                    # Get parent directory
+                    parent_path=$(dirname "${current_path%/}")
+                    # If the parent is the root, the new path is simply "/".
+                    # Otherwise, it's the parent path with a trailing slash.
+                    if [[ "$parent_path" == "/" ]]; then
+                        current_path="/"
+                    else
+                        current_path="${parent_path}/"
+                    fi
+                fi
+                ;;
+            "download_dir")
+                _download_folder_action "${snapshot_id}" "${current_path}"
+                ;;
+        esac
+    done
+}
+
+# ----------------------------------------------------
+#  Lists all snapshots in the Restic repository.
+# ----------------------------------------------------
+function vault_snapshots() {
+    local output_mode="$1"
+
+    if ! setup_restic; then return 1; fi
+    if ! setup_gum; then return 1; fi
+    if ! command -v php &>/dev/null; then echo "❌ Error: The 'php' command is required for this operation." >&2; return 1; fi
+    if ! command -v mktemp &>/dev/null; then echo "❌ Error: The 'mktemp' command is required for this operation." >&2; return 1; fi
+    if ! command -v wc &>/dev/null; then echo "❌ Error: The 'wc' command is required for this operation." >&2; return 1; fi
+
+    if ! _setup_vault_env; then
+        return 1 # Error message printed in helper
+    fi
+
+    local snapshots_json
+    snapshots_json=$("$GUM_CMD" spin --spinner dot --title "Fetching snapshots from repository..." -- \
+    "$RESTIC_CMD" snapshots --json
+)
+    if [[ ! "$snapshots_json" =~ ^\[ ]]; then
+        echo "Error: Failed to fetch snapshots. Restic output:" >&2
+        echo "$snapshots_json" >&2
+        exit 1
+    fi
+
+    local total_count
+    read -r -d '' php_script << 'EOF'
+    $json_string = file_get_contents("php://stdin");
+    $snapshots = json_decode($json_string, true);
+    if (json_last_error() === JSON_ERROR_NONE) {
+        echo count($snapshots);
+    } else {
+        echo 0;
+    }
+EOF
+    total_count=$("$GUM_CMD" spin --spinner dot --title "Counting total snapshots..." -- \
+        bash -c 'php -r "$1"' _ "$php_script" <<< "$snapshots_json"
+    )
+
+    echo "🔎 Fetching ${total_count} snapshots..."
+
+    if [[ "$snapshots_json" == "[]" ]]; then
+        echo "ℹ️ No snapshots found in the repository."
+        return 0
+    fi
+
+    local php_parser_code='
+<?php
+if (defined("STDIN")) {
+    $json_data = file_get_contents("php://stdin");
+    $snapshots = json_decode($json_data, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        fwrite(STDERR, "PHP Error: Failed to decode JSON - " . json_last_error_msg() . "\n");
+        exit(1);
+    }
+    if (empty($snapshots) || !is_array($snapshots)) {
+        exit(0);
+    }
+    usort($snapshots, function($a, $b) { return strtotime($b["time"]) - strtotime($a["time"]); });
+
+    foreach ($snapshots as $snap) {
+        $size_formatted = "N/A";
+        if (isset($snap["summary"]["total_bytes_processed"])) {
+            $size_bytes = (float)$snap["summary"]["total_bytes_processed"];
+            if ($size_bytes >= 1073741824) {
+                $size_formatted = round($size_bytes / 1073741824, 2) . " GB";
+            } elseif ($size_bytes >= 1048576) {
+                $size_formatted = round($size_bytes / 1048576, 2) . " MB";
+            } elseif ($size_bytes >= 1024) {
+                $size_formatted = round($size_bytes / 1024, 2) . " KB";
+            } elseif ($size_bytes > 0) {
+                $size_formatted = $size_bytes . " B";
+            }
+        }
+
+        echo $snap["short_id"] . "|" .
+             (new DateTime($snap["time"]))->format("Y-m-d H:i:s") . "|" .
+             $size_formatted . "\n";
+    }
+}
+'
+    local php_script_file
+    php_script_file=$(mktemp)
+    if [ -z "$php_script_file" ]; then
+        echo "❌ Error: Could not create a temporary file for the PHP script." >&2
+        return 1
+    fi
+
+    echo "$php_parser_code" > "$php_script_file"
+    local snapshot_list
+    snapshot_list=$(printf "%s" "$snapshots_json" | php -f "$php_script_file" 2>/dev/null)
+    rm -f "$php_script_file"
+
+    if [ -z "$snapshot_list" ]; then
+        echo "❌ Error parsing snapshot list." >&2
+        return 1
+    fi
+
+    local display_items=()
+    local data_items=()
+
+    while IFS='|' read -r id time size; do
+        if [ -z "$id" ]; then
+            continue
+        fi
+        display_items+=("$(printf "%-9s | %-20s | %-10s" "$id" "$time" "$size")")
+        data_items+=("$id")
+    done <<< "$snapshot_list"
+
+    if [[ "$output_mode" == "true" ]]; then
+        printf "%s\n" "${display_items[@]}"
+        return 0
+    fi
+
+    local selected_display
+    selected_display=$(printf "%s\n" "${display_items[@]}" | "$GUM_CMD" filter --height=20 --prompt="👇 Select a snapshot to browse" --indicator="→" --placeholder="")
+
+    if [ -z "$selected_display" ]; then echo "No snapshot selected."; return 0; fi
+
+    local selected_id
+    selected_id=$(echo "$selected_display" | awk '{print $1}')
+
+    local cache_file;
+    cache_file=$(mktemp)
+    if ! _cache_snapshot_files "$selected_id" "$cache_file"; then
+        [ -f "$cache_file" ] && rm -f "$cache_file"
+        return 1
+    fi
+
+    _browse_snapshot "$selected_id" "$cache_file"
+    rm -f "$cache_file"
+}
+
+# ----------------------------------------------------
+#  Mounts the Restic repository to a local directory. 
+# ----------------------------------------------------
+function vault_mount() {
+    echo "🚀 Preparing to mount Restic repository..."
+    if ! setup_restic; 
+    then return 1; fi
+    if ! _setup_vault_env; then return 1; 
+    fi
+
+    local mount_point="/tmp/restic_mount_$(date +%s)"
+    mkdir -p "$mount_point"
+
+    echo "   - Mount point created at: $mount_point"
+    echo "   - To unmount, run: umount \"$mount_point\""
+    echo "   - Press Ctrl+C to stop the foreground mount process."
+    "$RESTIC_CMD" mount "$mount_point" 
+}
+
+# ----------------------------------------------------
+#  Displays statistics about the Restic repository.
+# ----------------------------------------------------
+function vault_info() {
+    echo "🔎 Gathering repository information..."
+
+    # --- Pre-flight Checks ---
+    if ! setup_restic; then return 1; fi
+    if ! setup_gum; then return 1; fi
+    if ! setup_rclone; then return 1; fi
+    if ! command -v php &>/dev/null; then echo "❌ Error: The 'php' command is required for this operation." >&2; return 1; fi
+
+    if ! _setup_vault_env; then
+        return 1 # Error message printed in helper
+    fi
+
+    # --- Get repo size and file count using rclone ---
+    local temp_repo_string="${RESTIC_REPOSITORY#b2:}"
+    local b2_bucket="${temp_repo_string%%:*}"
+    local b2_path="${temp_repo_string#*:}"
+    local rclone_remote_string=":b2,account='${B2_ACCOUNT_ID}',key='${B2_ACCOUNT_KEY}':${b2_bucket}/${b2_path}"
+    
+    local size_json
+    size_json=$("$GUM_CMD" spin --spinner dot --title "Calculating repository size with rclone..." -- \
+        "$RCLONE_CMD" size --json "$rclone_remote_string"
+    )
+
+    local size_data=""
+    if [[ "$size_json" == *"bytes"* ]]; then
+        local size_parser_code='
+$json_str = file_get_contents("php://stdin");
+$data = json_decode($json_str, true);
+if (json_last_error() === JSON_ERROR_NONE) {
+    $bytes = $data["bytes"] ?? 0;
+    $count = $data["count"] ?? 0;
+    $size_formatted = "0 B";
+    if ($bytes >= 1073741824) { $size_formatted = round($bytes / 1073741824, 2) . " GiB"; }
+    elseif ($bytes >= 1048576) { $size_formatted = round($bytes / 1048576, 2) . " MiB"; }
+    elseif ($bytes >= 1024) { $size_formatted = round($bytes / 1024, 2) . " KiB"; }
+    elseif ($bytes > 0) { $size_formatted = $bytes . " B"; }
+    echo "Total Size," . $size_formatted . "\n";
+    echo "Total Files," . $count . "\n";
+}
+'
+        size_data=$(echo "$size_json" | php -r "$size_parser_code")
+    fi
+
+    # --- Get Snapshot Info from Restic ---
+    local snapshots_json
+    snapshots_json=$("$GUM_CMD" spin --spinner dot --title "Fetching snapshot list..." -- \
+        "$RESTIC_CMD" snapshots --json)
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ Error fetching snapshots from restic." >&2
+        echo "Restic output: $snapshots_json" >&2
+        return 1
+    fi
+
+    # Verify JSON and default to empty array if invalid
+    if ! printf "%s" "$snapshots_json" | "$GUM_CMD" format >/dev/null 2>&1; then
+        snapshots_json="[]"
+    fi
+    
+    # --- MODIFIED: Pipe Restic JSON directly to PHP parser ---
+    local php_parser_code_info='
+$json_data = file_get_contents("php://stdin");
+$snapshots = json_decode($json_data, true);
+
+// Exit if JSON is invalid or empty after decoding
+if (json_last_error() !== JSON_ERROR_NONE || !is_array($snapshots)) { exit(0); }
+
+$snapshot_count = count($snapshots); 
+$oldest_date = "N/A"; 
+$newest_date = "N/A"; 
+
+if ($snapshot_count > 0) {
+    $timestamps = array_map(function($s) {
+        return isset($s["time"]) ? strtotime($s["time"]) : 0;
+    }, $snapshots);
+    $timestamps = array_filter($timestamps); 
+    if(count($timestamps) > 0) {
+        $oldest_ts = min($timestamps);
+        $newest_ts = max($timestamps); 
+        $oldest_date = date("Y-m-d H:i:s T", $oldest_ts);
+        $newest_date = date("Y-m-d H:i:s T", $newest_ts);
+    }
+}
+echo "Snapshot Count," . $snapshot_count . "\n"; 
+echo "Oldest Snapshot," . $oldest_date . "\n"; 
+echo "Newest Snapshot," . $newest_date . "\n";
+'
+    local info_data
+    info_data=$(printf "%s" "$snapshots_json" | php -r "$php_parser_code_info")
+    
+    echo "--- Repository Information ---"
+    (
+      echo "Statistic,Value"
+      echo "B2 Bucket,${b2_bucket}"
+      echo "B2 Path,${b2_path}"
+      if [ -n "$size_data" ]; then echo "$size_data"; fi
+      if [ -n "$info_data" ]; then echo "$info_data"; fi
+    ) | "$GUM_CMD" table --print --separator "," --widths=20,40
+}
+
+# ----------------------------------------------------
+#  Prunes the Restic repository to remove unneeded data.
+# ----------------------------------------------------
+function vault_prune() {
+    echo "🚀 Preparing to prune the Restic repository..."
+    echo "This command removes old data that is no longer needed."
+    echo "It can be a long-running process and will lock the repository."
+
+    # --- Pre-flight Checks ---
+    if ! setup_restic; then return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    # --- Setup Restic Environment ---
+    if ! _setup_vault_env; then
+        return 1 # Error message printed in helper
+    fi
+
+    # --- User Confirmation ---
+    echo "Repository: ${RESTIC_REPOSITORY}"
+    if ! "$GUM_CMD" confirm "Are you sure you want to prune this repository?"; then
+        echo "Prune operation cancelled."
+        unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+        return 0
+    fi
+
+    # --- Run Restic Prune with lock detection ---
+    echo "   - Starting prune operation. This may take a while..."
+    local prune_output
+    # Capture all output (stdout and stderr) to check for the lock message
+    prune_output=$("$RESTIC_CMD" prune 2>&1)
+    local prune_exit_code=$?
+
+    # Check if the prune command failed
+    if [ $prune_exit_code -ne 0 ]; then
+        # If it failed, check if it was due to a lock
+        if echo "$prune_output" | grep -q "unable to create lock"; then
+            echo "⚠️ The repository is locked. A previous operation may have failed or is still running."
+            echo "$prune_output" # Show the user the detailed lock info from restic
+            
+            if "$GUM_CMD" confirm "Do you want to attempt to remove the stale lock and retry?"; then
+                echo "   - Attempting to unlock repository..."
+                if ! "$RESTIC_CMD" unlock; then
+                    echo "❌ Error: Failed to unlock the repository. Please check it manually." >&2
+                    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+                    return 1
+                fi
+                
+                echo "   - Unlock successful. Retrying prune operation..."
+                if ! "$RESTIC_CMD" prune; then
+                     echo "❌ Error: Restic prune command failed even after unlocking." >&2
+                     unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+                     return 1
+                fi
+            else
+                echo "Prune operation cancelled due to locked repository."
+                unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+                return 0
+            fi
+        else
+            # The failure was for a reason other than a lock
+            echo "❌ Error: Restic prune command failed." >&2
+            echo "$prune_output" >&2
+            unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+            return 1
+        fi
+    fi
+
+    # --- Cleanup ---
+    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+
+    echo "✅ Vault prune complete!"
+}
+
+# ----------------------------------------------------
+#  Deletes a specific snapshot from the Restic repository.
+# ----------------------------------------------------
+function vault_delete() {
+    local snapshot_id="$1"
+
+    if [ -z "$snapshot_id" ]; then
+        echo "❌ Error: You must provide a snapshot ID to delete." >&2
+        show_command_help "vault" >&2
+        return 1
+    fi
+
+    # --- Pre-flight Checks ---
+    if ! setup_restic; then return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    # --- Setup Restic Environment ---
+    if ! _setup_vault_env; then
+        return 1 # Error message printed in helper
+    fi
+
+    echo "You are about to permanently delete snapshot: ${snapshot_id}"
+    echo "This action cannot be undone."
+    if ! "$GUM_CMD" confirm "Are you sure you want to delete this snapshot?"; then
+        echo "Delete operation cancelled."
+        unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+        return 0
+    fi
+
+    echo "   - Deleting snapshot ${snapshot_id}..."
+    local forget_output
+    # Capture stdout and stderr to check for errors
+    forget_output=$("$RESTIC_CMD" forget "$snapshot_id" 2>&1)
+    local forget_exit_code=$?
+
+    # Check if the command failed
+    if [ $forget_exit_code -ne 0 ]; then
+        # If it failed, check if it was due to a lock
+        if echo "$forget_output" | grep -q "unable to create lock"; then
+            echo "⚠️ The repository is locked. A previous operation may have failed or is still running."
+            echo "$forget_output"
+            
+            if "$GUM_CMD" confirm "Do you want to attempt to remove the stale lock and retry?"; then
+                echo "   - Attempting to unlock repository..."
+                if ! "$RESTIC_CMD" unlock; then
+                    echo "❌ Error: Failed to unlock the repository. Please check it manually." >&2
+                    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+                    return 1
+                fi
+                
+                echo "   - Unlock successful. Retrying delete operation..."
+                if ! "$RESTIC_CMD" forget "$snapshot_id"; then
+                     echo "❌ Error: Restic forget command failed even after unlocking." >&2
+                     unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+                     return 1
+                fi
+            else
+                echo "Delete operation cancelled due to locked repository."
+                unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+                return 0
+            fi
+        else
+            # The failure was for a reason other than a lock
+            echo "❌ Error: Failed to delete snapshot ${snapshot_id}." >&2
+            echo "$forget_output" >&2
+            unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+            return 1
+        fi
+    else
+        # Print the success output from the first attempt
+        echo "$forget_output"
+    fi
+
+    # --- Cleanup ---
+    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+
+    echo "✅ Snapshot ${snapshot_id} has been forgotten."
+    echo "💡 Note: This only removes the snapshot reference. To free up storage space by removing the underlying data, run '_do vault prune'."
+}
+
+function vault_snapshot_info() {
+    local snapshot_id="$1"
+
+    if [ -z "$snapshot_id" ];
+    then
+        echo "❌ Error: You must provide a snapshot ID."
+        show_command_help "vault" >&2
+        return 1
+    fi
+
+    # --- Pre-flight Checks ---
+    if ! setup_restic; then return 1; fi
+    if ! setup_gum; then return 1; fi
+    if ! command -v php &>/dev/null; then
+        echo "❌ Error: The 'php' command is required for this operation."
+        >&2
+        return 1
+    fi
+
+    # --- Setup Restic Environment ---
+    if ! _setup_vault_env; then
+        return 1
+    fi
+
+    # --- Fetch Snapshot Data ---
+    echo "🔎 Fetching information for snapshot ${snapshot_id}..."
+    local snapshots_json
+    snapshots_json=$("$GUM_CMD" spin --spinner dot --title "Fetching repository data..." -- \
+        "$RESTIC_CMD" snapshots --json)
+
+    if [ $? -ne 0 ]; then
+        echo "❌ Error: Failed to fetch snapshot list from the repository."
+        >&2
+        unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+        return 1
+    fi
+
+    # --- PHP Parser ---
+    # This script searches the JSON list for the specific snapshot ID and falls back to 'restic stats' if needed.
+    local php_parser_code='
+$target_id = $argv[1] ?? "";
+$restic_cmd = $argv[2] ?? "restic";
+
+if (empty($target_id)) { exit(1);
+}
+
+$json_data = file_get_contents("php://stdin");
+$snapshots = json_decode($json_data, true);
+if (json_last_error() !== JSON_ERROR_NONE || !is_array($snapshots)) {
+    exit(1);
+}
+
+$found_snap = null;
+foreach ($snapshots as $snap) {
+    if ((isset($snap["id"]) && strpos($snap["id"], $target_id) === 0) || (isset($snap["short_id"]) && $snap["short_id"] === $target_id)) {
+        $found_snap = $snap;
+        break;
+    }
+}
+
+if ($found_snap === null) {
+    fwrite(STDERR, "Snapshot with ID starting with \"$target_id\" not found.\n");
+    exit(1);
+}
+
+$snap = $found_snap;
+
+function format_bytes($bytes) {
+    $bytes = (float)$bytes;
+    if ($bytes >= 1073741824) { return round($bytes / 1073741824, 2) . " GB"; }
+    elseif ($bytes >= 1048576) { return round($bytes / 1048576, 2) . " MB"; }
+    elseif ($bytes >= 1024) { return round($bytes / 1024, 2) . " KB"; }
+    elseif ($bytes > 0) { return $bytes . " B"; }
+    else { return "0 B"; }
+}
+
+$output = [];
+$output["ID"] = $snap["short_id"] ?? "N/A";
+$output["Time"] = isset($snap["time"]) ? (new DateTime($snap["time"]))->format("Y-m-d H:i:s T") : "N/A";
+$output["Parent"] = $snap["parent"] ?? "None";
+$output["Paths"] = isset($snap["paths"]) && is_array($snap["paths"]) ? implode("\n", $snap["paths"]) : "N/A";
+
+$size_formatted = "N/A";
+$data_added_formatted = "N/A";
+
+if (isset($snap["summary"]["total_bytes_processed"])) {
+    $size_formatted = format_bytes($snap["summary"]["total_bytes_processed"]);
+    if (isset($snap["summary"]["data_added"])) {
+        $data_added_formatted = format_bytes($snap["summary"]["data_added"]);
+    }
+} else {
+    fwrite(STDERR, "Snapshot summary not found. Calculating size with '\''restic stats'\''.\n");
+    $full_snapshot_id = $snap["id"];
+    $stats_json = shell_exec(escapeshellarg($restic_cmd) . " stats --json " . escapeshellarg($full_snapshot_id));
+    if ($stats_json) {
+        $stats_data = json_decode($stats_json, true);
+        if (json_last_error() === JSON_ERROR_NONE && isset($stats_data["total_size"])) {
+            $size_formatted = format_bytes($stats_data["total_size"]);
+        }
+    }
+}
+
+$output["Size (Full)"] = $size_formatted;
+$output["Data Added (Unique)"] = $data_added_formatted;
+
+foreach($output as $key => $value) {
+    // Using addslashes and quoting to handle multi-line paths and other special characters
+    echo $key . "," . "\"" . addslashes($value) . "\"\n";
+}
+'
+    # --- Process and Display ---
+    local info_data
+    info_data=$(echo "$snapshots_json" | php -r "$php_parser_code" "$snapshot_id" "$RESTIC_CMD")
+
+    # If the PHP script returns no data, the snapshot was not found in the JSON.
+    if [ -z "$info_data" ]; then
+        echo "❌ Error: Could not find data for snapshot '${snapshot_id}' in the repository list." >&2
+        unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+        return 1
+    fi
+
+    # Unset variables for security
+    unset B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY
+
+    # Display the final table
+    echo "--- Snapshot Information ---"
+    (
+      echo "Property,Value"
+      # The PHP script now correctly escapes output for the table
+      echo "$info_data"
+    ) |
+    "$GUM_CMD" table --print --separator "," --widths=25,0
+
+}
 # ----------------------------------------------------
 #  Displays the version of the _do script.
 # ----------------------------------------------------
