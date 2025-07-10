@@ -1,0 +1,96 @@
+# ----------------------------------------------------
+#  Creates a zip archive of a specified folder.
+# ----------------------------------------------------
+function run_zip() {
+    local target_folder="$1"
+
+    # --- 1. Validate Input ---
+    if [ -z "$target_folder" ]; then
+        echo "Error: No folder specified." >&2
+        echo "Usage: _do zip \"<folder>\"" >&2
+        return 1
+    fi
+
+    if [ ! -d "$target_folder" ]; then
+        echo "Error: Folder '$target_folder' not found." >&2
+        return 1
+    fi
+
+    if ! command -v realpath &> /dev/null; then
+        echo "Error: 'realpath' command is required but not found." >&2
+        return 1
+    fi
+
+    # --- 2. Determine Paths and Names ---
+    local full_target_path
+    full_target_path=$(realpath "$target_folder")
+    local parent_dir
+    parent_dir=$(dirname "$full_target_path")
+    local dir_to_zip
+    dir_to_zip=$(basename "$full_target_path")
+    local output_zip_file="${dir_to_zip}.zip"
+    local output_zip_path="${parent_dir}/${output_zip_file}"
+
+    # Prevent zipping to the same name if it already exists
+    if [ -f "$output_zip_path" ]; then
+        echo "Error: A file named '${output_zip_file}' already exists in the target directory." >&2
+        return 1
+    fi
+
+    echo "🚀 Creating zip archive for '${dir_to_zip}'..."
+
+    # --- 3. Create Zip Archive ---
+    # Change to the parent directory to ensure clean paths inside the zip
+    local original_dir
+    original_dir=$(pwd)
+    cd "$parent_dir" || { echo "Error: Could not change to directory '$parent_dir'." >&2; return 1; }
+
+    # Create the zip file, excluding common unnecessary files
+    if ! zip -r "$output_zip_file" "$dir_to_zip" -x "*.git*" "*.DS_Store*" "*node_modules*" > /dev/null; then
+        echo "Error: Failed to create zip archive." >&2
+        cd "$original_dir"
+        return 1
+    fi
+
+    # Return to the original directory
+    cd "$original_dir"
+
+    # --- 4. Final Report ---
+    local file_size
+    file_size=$(du -h "$output_zip_path" | cut -f1 | xargs)
+    local final_output_path="$output_zip_path"
+
+    # --- WordPress URL Logic ---
+    local zip_url=""
+    # Silently check if WP-CLI is available and we're in a WordPress installation.
+    # This check works by traversing up from the current directory.
+    if setup_wp_cli &>/dev/null && "$WP_CLI_CMD" core is-installed --quiet 2>/dev/null; then
+        local wp_home
+        wp_home=$("$WP_CLI_CMD" option get home --skip-plugins --skip-themes 2>/dev/null)
+        
+        if [ -n "$wp_home" ]; then
+            local wp_root_path
+            # Use `wp config path` to reliably find the WP root.
+            wp_root_path=$("$WP_CLI_CMD" config path --quiet 2>/dev/null)
+            
+            if [ -n "$wp_root_path" ] && [ -f "$wp_root_path" ]; then
+                wp_root_path=$(dirname "$wp_root_path")
+                
+                # The zip file is created in `parent_dir`. We need its path relative to the WP root.
+                local relative_zip_dir_path
+                relative_zip_dir_path=${parent_dir#"$wp_root_path"}
+                
+                # Construct the final URL
+                zip_url="${wp_home%/}${relative_zip_dir_path}/${output_zip_file}"
+            fi
+        fi
+    fi
+    # --- End WordPress URL Logic ---
+
+    echo "✅ Zip archive created successfully."
+    if [ -n "$zip_url" ]; then
+        echo "   Link: $zip_url ($file_size)"
+    else
+        echo "   File: $final_output_path ($file_size)"
+    fi
+}

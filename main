@@ -887,6 +887,17 @@ function show_command_help() {
             echo "Subcommands:"
             echo "  check     Runs a check to find themes or plugins causing WP-CLI warnings."
             ;;
+        zip)
+            echo "Creates a zip archive of a specified folder."
+            echo
+            echo "Usage: _do zip \"<folder>\""
+            echo
+            echo "Arguments:"
+            echo "  <folder>  (Required) The folder to be archived."
+            echo
+            echo "If the folder is a WordPress installation, a public URL to the zip file will be provided."
+            echo "Otherwise, the local file path and size will be displayed."
+            ;;
         *)
             echo "Error: Unknown command '$cmd' for help." >&2
             echo ""
@@ -929,6 +940,7 @@ function show_usage() {
     echo "  vault               Manages secure snapshots in a remote Restic repository."
     echo "  version             Displays the current version of the _do script."
     echo "  wpcli               Checks for and identifies sources of WP-CLI warnings."
+    echo "  zip                 Creates a zip archive of a specified folder."
     echo ""
     echo "Run '_do help <command>' for more information on a specific command."
 }
@@ -1368,6 +1380,9 @@ function main() {
                     exit 0
                     ;;
             esac
+            ;;
+        zip)
+            run_zip "${positional_args[1]}"
             ;;
         *)
             echo "Error: Unknown command '$command'." >&2
