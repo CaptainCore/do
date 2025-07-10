@@ -1,37 +1,41 @@
 # CaptainCore `_do`
 
-A collection of useful command-line utilities for managing WordPress websites. These tools are designed to streamline common administrative tasks such as backups, performance analysis, media optimization, and site migrations.
+CaptainCore `_do` is a powerful and versatile command-line toolkit designed to streamline WordPress administration. It offers a rich set of utilities for automating common tasks, including sophisticated backup solutions, performance analysis, site maintenance, and development workflows.
 
 ## Features
 
--   **Database & Full Site Backups**: Easily create database-only or full-site (files + database) backups.
--   **Real-time Traffic Monitoring**: Watch your server's access logs in real-time with a clean, readable table format.
--   **Performance Profiling**: Identify slow WordPress plugins that may be impacting WP-CLI performance.
--   **Disk Usage Analysis**: Interactively analyze disk space usage to find large files and directories.
--   **Image Optimization**: Find and convert large images to the modern, efficient WebP format.
--   **Automated Site Migrations**: Migrate a WordPress site from a URL or local backup file with a single command.
+  - **Advanced Checkpoint System**: Create file-level checkpoints before making changes and easily revert your WordPress core, themes, and plugins to any previous state.
+  - **Secure Update Management**: Run WordPress core, theme, and plugin updates within a safe workflow that automatically creates 'before' and 'after' checkpoints, allowing you to review the exact changes and revert if needed.
+  - **Remote Vault Backups**: Implement a secure, off-site backup strategy with encrypted, full-site snapshots stored in a Restic repository on Backblaze B2. Manage snapshots, browse contents, and restore files from a trusted local machine without storing credentials on the server.
+  - **Scheduled Tasks (Cron)**: Schedule any `_do` command to run automatically at specific intervals for hands-off site maintenance.
+  - **In-depth Performance Analysis**: Diagnose performance issues by identifying slow plugins impacting WP-CLI, checking for large autoloaded options in the database, and finding hidden or malfunctioning plugins.
+  - **Comprehensive Database Management**: Perform database-only backups, optimize tables to InnoDB, clean transients, and even change the database table prefix securely.
+  - **Real-time Monitoring**: Watch server activity as it happens, with tools to monitor traffic, stream access/error logs, and specifically tail for critical errors.
+  - **Effortless Site Migrations & Setup**: Automate site migrations from a backup URL and quickly launch a site by updating URLs and search engine visibility settings.
+  - **Media & Disk Optimization**: Convert images to the efficient WebP format and interactively analyze disk usage to find and clean up large files.
+  - **Development Tools**: Includes `compile.sh` to bundle the script for distribution and `watch.sh` to automatically re-compile on file changes, streamlining the development process.
 
 ## Prerequisites
 
 Before using these tools, you need to have the following command-line utilities installed on your server:
 
--   **[wp-cli](https://wp-cli.org/)**: The command-line interface for WordPress.
--   **[wget](https://www.gnu.org/software/wget/)**: For downloading files from the web.
--   **[zip](https://infozip.sourceforge.net/Zip.html)** / **[unzip](https://infozip.sourceforge.net/UnZip.html)**: For creating and extracting zip archives.
--   **[tar](https://www.gnu.org/software/tar/)**: For handling `.tar.gz` archives.
--   **[rsync](https://rsync.samba.org/)**: For efficient file transfers.
--   **[ImageMagick](https://imagemagick.org/)**: Specifically, the `identify` command is used for checking image formats.
--   **[mysqldump](https://dev.mysql.com/doc/refman/8.0/en/mysqldump.html)** or **[mariadb-dump](https://mariadb.com/kb/en/mariadb-dump/)**: For creating database backups.
+  - **[wp-cli](https://wp-cli.org/)**: The command-line interface for WordPress.
+  - **[wget](https://www.gnu.org/software/wget/)**: For downloading files.
+  - **[curl](https://curl.se/)**: For downloading files and making API requests.
+  - **[git](https://git-scm.com/)**: Required for the `checkpoint` and `update` features.
+  - **[rsync](https://rsync.samba.org/)**: For efficient file synchronization.
+  - **[zip](https://infozip.sourceforge.net/Zip.html)** / **[unzip](https://infozip.sourceforge.net/UnZip.html)**: For handling `.zip` archives.
+  - **[tar](https://www.gnu.org/software/tar/)**: For handling `.tar.gz` archives.
+  - **[mysqldump](https://dev.mysql.com/doc/refman/8.0/en/mysqldump.html)** or **[mariadb-dump](https://mariadb.com/kb/en/mariadb-dump/)**: For creating database backups.
+
 
 ### Automatic Dependencies
 
-The script will automatically handle the installation of the following tools if they are not found:
+The script will automatically download and install the following tools into a `~/private` or similar directory if they are not found system-wide:
 
--   **[gum](https://github.com/charmbracelet/gum)**: A tool for creating glamorous shell scripts. Used by the `monitor_traffic` command.
--   **[cwebp](https://developers.google.com/speed/webp/docs/cwebp)**: The WebP encoder. Used by the `convert_to_webp` command.
--   **[rclone](https://rclone.org/)**: A versatile cloud storage tool. Used by the `clean disk` command for its interactive disk usage feature.
-
-These tools will be downloaded and installed into a `~/private` directory in your home folder.
+  - **[gum](https://github.com/charmbracelet/gum)**: For creating interactive prompts and beautiful shell output.
+  - **[cwebp](https://developers.google.com/speed/webp/docs/cwebp)**: The WebP encoder used for image optimization.
+  - **[rclone](https://rclone.org/)**: A versatile cloud storage tool used for the interactive disk cleaner and Vault features.
 
 ## Installation
 
@@ -41,19 +45,30 @@ The easiest way to use CaptainCore `_do` is by defining an alias to [captaincore
 alias _do='bash <(curl -sL https://captaincore.io/do)'
 ```
 
- That allows you to use `_do` without installing anything. The alias will last for the duration of your terminal session. Want to make it persistent? Then add the alias to your `~/.bash_aliases` file or `~/.zshrc` if you use ZSH.
+That allows you to use `_do` without installing anything. The alias will last for the duration of your terminal session. Want to make it persistent? Then add it to your shell's startup file.
 
-SSH in non-interactive mode doesn't support aliases. For that we can use the following method.
+
+1.  **Open your shell configuration file.**
+
+      - For Bash, use: `nano ~/.bash_aliases` or `nano ~/.bashrc`
+      - For Zsh, use: `nano ~/.zshrc`
+
+2.  **Add the alias line to the file:**
+
+    ```bash
+    alias _do='bash <(curl -sL https://captaincore.io/do)'
+    ```
+
+3.  **Reload your shell configuration.**
+
+      - For Bash: `source ~/.bashrc`
+      - For Zsh: `source ~/.zshrc`
+
+You can execute the script directly for one-off commands. This is help for SSH in non-interactive mode which wouldn't have ability to use an alias.
+
 ```bash
-ssh username@ip-address -p 22 "bash <(curl -sL https://captaincore.io/do) help version"
-```
-
-Response would be:
-
-```bash
-Displays the current version of the _do script.
-
-Usage: _do version
+# Example: Remotely check the script version
+ssh username@ip-address "bash <(curl -sL https://captaincore.io/do) version"
 ```
 
 ## Usage
@@ -407,6 +422,34 @@ fi
 
 echo "Done."
 ```
+
+### Command Reference
+
+| Command | Description |
+| :--- | :--- |
+| **backup** | Creates a full backup (files + DB) of a WordPress site. |
+| **checkpoint** | Manages versioned checkpoints of the site's manifest. |
+| **clean** | Removes unused items or analyzes disk usage. |
+| **convert-to-webp**| Converts large JPG/PNG images to WebP format. |
+| **cron** | Manages scheduled tasks for the script. |
+| **db** | Performs database operations (backup, check-autoload, optimize). |
+| **dump** | Dumps file contents matching a pattern into a single text file. |
+| **email** | Sends an email using `wp_mail` via WP-CLI. |
+| **find** | Finds recently modified files, slow plugins, hidden plugins, or malware. |
+| **https** | Applies HTTPS to all site URLs. |
+| **install** | Installs helper and premium plugins. |
+| **launch** | Launches a site to a new domain. |
+| **migrate** | Migrates a site from a backup URL or local file. |
+| **monitor** | Monitors server logs for traffic and errors in real-time. |
+| **reset** | Resets WordPress components or file permissions. |
+| **suspend** | Activates or deactivates a "Website Suspended" message. |
+| **update** | Runs WordPress updates within the checkpoint system. |
+| **upgrade** | Upgrades this script to the latest version. |
+| **vault** | Manages secure, remote snapshots in a Restic repository. |
+| **version** | Displays the current version of the script. |
+| **wpcli** | Checks for and identifies sources of WP-CLI warnings. |
+
+For detailed usage of any command, run `_do help <command>`.
 
 ## Development
 
