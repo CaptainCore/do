@@ -754,7 +754,10 @@ function show_command_help() {
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
             echo
-            echo "Usage: _do convert-to-webp [--all]"
+            echo "Usage: _do convert-to-webp [folder] [--all]"
+            echo
+            echo "Arguments:"
+            echo "  [folder] (Optional) The folder to convert. Defaults to 'wp-content/uploads'."
             echo
             echo "Flags:"
             echo "  --all    Convert all images, regardless of size. Defaults to images > 1MB."
@@ -1172,7 +1175,8 @@ function main() {
             esac
             ;;
         convert-to-webp)
-            convert_to_webp "$all_files_flag"
+            # Pass the optional folder (positional_args[1]) and the --all flag
+            convert_to_webp "${positional_args[1]}" "$all_files_flag"
             ;;
         dump)
             # There should be exactly 2 positional args total: 'dump' and the pattern.

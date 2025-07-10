@@ -3,7 +3,10 @@
 #  WebP format.
 # ----------------------------------------------------
 function convert_to_webp() {
-    local all_files_flag="$1"
+    # The target directory is the first positional argument.
+    # The --all flag is passed as the second argument from main.
+    local target_dir_arg="$1"
+    local all_files_flag="$2"
     echo "🚀 Starting WebP Conversion Process 🚀"
 
     # --- Pre-flight Checks ---
@@ -22,20 +25,28 @@ function convert_to_webp() {
         echo "Warning: 'identify' command not found. Falling back to PHP check."
     fi
 
-    local uploads_dir="wp-content/uploads"
-    if [ ! -d "$uploads_dir" ]; then
-        echo "❌ Error: Cannot find '$uploads_dir' directory." >&2
+    # --- Determine target directory ---
+    local target_dir="wp-content/uploads"
+    if [ -n "$target_dir_arg" ]; then
+        target_dir="$target_dir_arg"
+        echo "Targeting custom directory: $target_dir"
+    else
+        echo "Targeting default directory: $target_dir"
+    fi
+
+    if [ ! -d "$target_dir" ]; then
+        echo "❌ Error: Cannot find '$target_dir' directory." >&2
         return 1
     fi
 
     # --- Size and File Discovery ---
     local before_size
-    before_size="$(du -sh "$uploads_dir" | awk '{print $1}')"
-    echo "Current uploads size: $before_size"
+    before_size="$(du -sh "$target_dir" | awk '{print $1}')"
+    echo "Current directory size: $before_size"
 
     local size_limit_mb=1
     local message="larger than ${size_limit_mb}MB"
-    local find_args=("$uploads_dir" -type f)
+    local find_args=("$target_dir" -type f)
 
     if [[ "$all_files_flag" == "true" ]]; then
         message="of all sizes"
@@ -100,19 +111,25 @@ function convert_to_webp() {
     local job_count=0
     local processed_count=0
 
-    echo "$files" | while IFS= read -r file; do
+    # Use process substitution to avoid creating a subshell for the while loop.
+    # This ensures the main script's 'wait' command can see all background jobs.
+    while IFS= read -r file; do
         processed_count=$((processed_count + 1))
         
         # Run the processing function in the background.
         _process_single_image "$file" "$processed_count" "$count" &
 
-        job_count=$((job_count + 1))
-        # If we've reached the max number of jobs, wait for any one to finish before continuing.
-        if (( job_count >= max_jobs )); then
-            wait -n
-            job_count=$((job_count - 1))
+        # On Linux, use 'wait -n' for a sliding window of jobs.
+        # On macOS, bash doesn't support 'wait -n', so we skip this
+        # and let the final 'wait' handle all jobs at once.
+        if [[ "$(uname)" != "Darwin" ]]; then
+            job_count=$((job_count + 1))
+            if (( job_count >= max_jobs )); then
+                wait -n
+                job_count=$((job_count - 1))
+            fi
         fi
-    done
+    done < <(echo "$files")
 
     # Wait for all remaining background jobs to complete before proceeding.
     wait
@@ -120,9 +137,9 @@ function convert_to_webp() {
     # --- Final Summary ---
     echo ""
     local after_size
-    after_size="$(du -sh "$uploads_dir" | awk '{print $1}')"
+    after_size="$(du -sh "$target_dir" | awk '{print $1}')"
     echo "✅ Bulk conversion complete!"
     echo "-----------------------------------------------------"
-    echo "   Uploads folder size reduced from $before_size to $after_size."
+    echo "   Directory size reduced from $before_size to $after_size."
     echo "-----------------------------------------------------"
 }
