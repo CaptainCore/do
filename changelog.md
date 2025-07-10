@@ -1,5 +1,54 @@
 # Changelog
 
+An analysis of the two script versions reveals significant enhancements in version 1.2, focusing on new features, improved dependency management, and increased command organization.
+
+## [1.2] - 2025-07-10
+
+### Added
+
+* **New `vault` Command Suite:** A comprehensive set of commands for managing secure, remote, full-site snapshots using Restic and Backblaze B2. This includes creating, listing, deleting, and Browse snapshots, as well as mounting the entire backup repository.
+* **New `find` Command Suite:** Centralizes several diagnostic tools under a single command:
+    * `find recent-files`: Finds files modified within a specified number of days.
+    * `find slow-plugins`: Relocated from a top-level command to identify plugins that may be slowing down WP-CLI.
+    * `find hidden-plugins`: Detects active plugins that may be hidden from the standard list.
+    * `find malware`: Scans for suspicious code patterns and verifies core and plugin file integrity.
+    * `find php-tags`: Scans for outdated PHP short tags.
+* **New `install` Command Suite:** Simplifies the installation of helper and premium plugins:
+    * `install kinsta-mu`: Installs the Kinsta Must-Use plugin.
+    * `install helper`: Installs the CaptainCore Helper plugin.
+    * `install events-calendar-pro`: Installs The Events Calendar Pro after prompting for a license.
+* **New Standalone Commands:**
+    * `https` Applies HTTPS to all site URLs with an interactive prompt for 'www' preference.
+    * `launch`: A dedicated command to launch a site, updating the URL from a development to a live domain.
+    * `upgrade`: Allows the `_do` script to upgrade itself to the latest version.
+    * `email`: Provides an interactive prompt to send an email using `wp_mail` via WP-CLI.
+* **New `db` Subcommand:**
+    * `db change-prefix`: Safely changes the database table prefix after creating a backup.
+* **Advanced Dependency Sideloading:**
+    * Introduced new `setup_restic`, `setup_imagemagick`, and `setup_git` functions to automatically download and use these tools in a private directory if they are not installed system-wide.
+    * The ImageMagick setup cleverly extracts the `identify` binary from an AppImage to avoid system-level installation and FUSE issues.
+* **New Flags:**
+    * `--all` for `convert-to-webp` to convert all images regardless of their file size.
+    * `--domain` for `launch` to specify the new domain non-interactively.
+    * `--force` for `install kinsta-mu` to bypass the Kinsta environment check.
+    * `--output` for `vault snapshots` to provide a non-interactive list.
+
+### Changed
+
+* **Command Refactoring:**
+    * The `reset-wp` command has been moved to `reset wp`. It now features a more user-friendly interactive selector for choosing the admin user, rather than requiring a command-line flag.
+    * The `reset-permissions` command has been moved to `reset permissions`.
+    * The `slow-plugins` command has been moved to `find slow-plugins`.
+* **Dependency Management Overhaul:** The `setup_*` functions (e.g., `setup_gum`, `setup_cwebp`, `setup_rclone`) have been completely rewritten. They are now more robust, checking for existing local binaries, using `curl` for downloads, and intelligently finding the executable within archives before extraction.
+* **Private Directory Discovery:** The `_get_private_dir` helper function is now significantly more intelligent. It checks WP-CLI configurations, WPEngine-specific paths, and common parent directory structures (`../private`, `../tmp`) before falling back to the user's home directory.
+* **WebP Conversion:** The `convert-to-webp` command no longer relies on a system-installed `identify` command. It now uses the sideloaded ImageMagick binary and includes a PHP-based fallback (`_is_webp_php`) to check if a file is already in WebP format.
+* **Dump Command URL:** The `dump` command will now generate and display a public URL for the created text file if the script is run within a WordPress installation.
+* **Database Autoload Check:** The query in `db check-autoload` was updated to check for `autoload IN ('yes', 'on')` to be compatible with more database configurations.
+
+### Fixed
+
+* **PHP Tag Scanning Portability:** The `php-tags` command was rewritten to use a more portable `grep` syntax, removing the dependency on the `-P` (Perl-compatible regex) flag. This ensures the command works correctly on systems like macOS where this flag is not available by default.
+
 ## [1.1] - 2025-06-21
 
 ### Features
