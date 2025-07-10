@@ -6,9 +6,20 @@ function convert_to_webp() {
     local all_files_flag="$1"
     echo "🚀 Starting WebP Conversion Process 🚀"
 
+    # --- Pre-flight Checks ---
     if ! setup_cwebp; then
         echo "Aborting conversion: cwebp setup failed." >&2
         return 1
+    fi
+
+    # --- Initialize and Report Identify Method ---
+    # Prime the _is_webp function to determine the method and export the choice.
+    _is_webp ""
+    # Now that IDENTIFY_METHOD is set, report the choice to the user once.
+    if [[ "$IDENTIFY_METHOD" == "identify" ]]; then
+        echo "Using 'identify' command for image type checking."
+    else
+        echo "Warning: 'identify' command not found. Falling back to PHP check."
     fi
 
     local uploads_dir="wp-content/uploads"
@@ -17,6 +28,7 @@ function convert_to_webp() {
         return 1
     fi
 
+    # --- Size and File Discovery ---
     local before_size
     before_size="$(du -sh "$uploads_dir" | awk '{print $1}')"
     echo "Current uploads size: $before_size"
@@ -24,10 +36,11 @@ function convert_to_webp() {
     local size_limit_mb=1
     local message="larger than ${size_limit_mb}MB"
     local find_args=("$uploads_dir" -type f)
-    if [[ "$all_files_flag" != "true" ]]; then
-        find_args+=(-size "+${size_limit_mb}M")
-    else
+
+    if [[ "$all_files_flag" == "true" ]]; then
         message="of all sizes"
+    else
+        find_args+=(-size "+${size_limit_mb}M")
     fi
     find_args+=(\( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \))
 
@@ -40,33 +53,71 @@ function convert_to_webp() {
     fi
     local count
     count=$(echo "$files" | wc -l | xargs)
-    echo "Found $count image(s) ${message} to process..."
+    echo "Found $count image(s) ${message} to process using up to 5 concurrent threads..."
     echo ""
 
-    local processed_count=0
-    echo "$files" | while IFS= read -r file; do
-        processed_count=$((processed_count + 1))
+    # --- Helper function for processing a single image ---
+    # This function will be run in the background for each image.
+    _process_single_image() {
+        local file="$1"
+        local current_num="$2"
+        local total_num="$3"
+
+        # The _is_webp function checks if the file is already in WebP format.
         if _is_webp "$file"; then
-            echo "⚪️ Skipping ${processed_count}/${count} (already WebP): $file"
-            continue
+            echo "⚪️ Skipping ${current_num}/${total_num} (already WebP): $file"
+            return
         fi
 
         local temp_file="${file}.temp.webp"
         local before_file_size
         before_file_size=$(ls -lh "$file" | awk '{print $5}')
 
+        # The actual conversion command, output is suppressed for a cleaner log.
         "$CWEBP_CMD" -q 80 "$file" -o "$temp_file" > /dev/null 2>&1
+
+        # Check if the conversion was successful and the new file has content.
         if [ -s "$temp_file" ]; then
             mv "$temp_file" "$file"
             local after_file_size
             after_file_size=$(ls -lh "$file" | awk '{print $5}')
-            echo "✅ Converted ${processed_count}/${count} ($before_file_size -> $after_file_size): $file"
+            echo "✅ Converted ${current_num}/${total_num} ($before_file_size -> $after_file_size): $file"
         else
+            # Cleanup failed temporary file and report the failure.
             rm -f "$temp_file"
-            echo "❌ Failed ${processed_count}/${count}: $file"
+            echo "❌ Failed ${current_num}/${total_num}: $file"
+        fi
+    }
+
+    # Export the helper function and its dependencies so they are available to the subshells.
+    export -f _process_single_image
+    export -f _is_webp
+    export -f _is_webp_php
+    export -f setup_wp_cli
+
+    # --- Concurrent Processing Loop ---
+    local max_jobs=5
+    local job_count=0
+    local processed_count=0
+
+    echo "$files" | while IFS= read -r file; do
+        processed_count=$((processed_count + 1))
+        
+        # Run the processing function in the background.
+        _process_single_image "$file" "$processed_count" "$count" &
+
+        job_count=$((job_count + 1))
+        # If we've reached the max number of jobs, wait for any one to finish before continuing.
+        if (( job_count >= max_jobs )); then
+            wait -n
+            job_count=$((job_count - 1))
         fi
     done
 
+    # Wait for all remaining background jobs to complete before proceeding.
+    wait
+
+    # --- Final Summary ---
     echo ""
     local after_size
     after_size="$(du -sh "$uploads_dir" | awk '{print $1}')"

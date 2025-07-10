@@ -612,16 +612,16 @@ function _is_webp() {
     # Determine which method to use, but only do it once.
     if [[ -z "$IDENTIFY_METHOD" ]]; then
         if command -v identify &> /dev/null; then
-            echo "Using 'identify' command for image type checking." >&2
-            IDENTIFY_METHOD="identify"
+            export IDENTIFY_METHOD="identify"
         else
-            echo "Warning: 'identify' command not found. Falling back to PHP check." >&2
-            IDENTIFY_METHOD="php"
+            export IDENTIFY_METHOD="php"
         fi
     fi
 
     # Execute the chosen method
     if [[ "$IDENTIFY_METHOD" == "identify" ]]; then
+        # Return false if the file doesn't exist to prevent errors.
+        if [ ! -f "$1" ]; then return 1; fi
         if [[ "$(identify -format "%m" "$1")" == "WEBP" ]]; then
             return 0 # It is a WebP file
         else
