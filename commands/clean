@@ -35,6 +35,76 @@ function clean_themes() {
 }
 
 # ----------------------------------------------------
+#  Deletes inactive plugins.
+#  On multisite, only deletes plugins not active on any site.
+# ----------------------------------------------------
+function clean_plugins() {
+    # --- Pre-flight checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    echo "🚀 Cleaning inactive plugins..."
+
+    # --- Multisite vs. Single Site Logic ---
+    if "$WP_CLI_CMD" core is-installed --network --quiet; then
+        echo "ℹ️ Multisite installation detected. Finding plugins that are not active on any site..."
+
+        # Get all installed plugins (slugs)
+        local all_installed_plugins
+        all_installed_plugins=$("$WP_CLI_CMD" plugin list --field=name)
+
+        # Get all network-activated plugins
+        local network_active_plugins
+        network_active_plugins=$("$WP_CLI_CMD" plugin list --network --status=active --field=name)
+
+        # Get all plugins active on individual sites
+        local site_active_plugins
+        site_active_plugins=$("$WP_CLI_CMD" site list --field=url --format=ids | xargs -I % "$WP_CLI_CMD" plugin list --url=% --status=active --field=name)
+
+        # Combine all active plugins (network + site-specific) and get a unique, sorted list
+        local all_active_plugins
+        all_active_plugins=$(echo -e "${network_active_plugins}\n${site_active_plugins}" | sort -u | grep -v '^$')
+
+        # Find plugins that are in the installed list but not in the combined active list
+        local plugins_to_delete
+        plugins_to_delete=$(comm -23 <(echo "$all_installed_plugins" | sort) <(echo "$all_active_plugins" | sort))
+
+    else
+        echo "ℹ️ Single site installation detected. Finding inactive plugins..."
+        # On a single site, 'inactive' is sufficient
+        local plugins_to_delete
+        plugins_to_delete=$("$WP_CLI_CMD" plugin list --status=inactive --field=name)
+    fi
+
+    if [ -z "$plugins_to_delete" ]; then
+        echo "✅ No inactive plugins found to delete."
+        return 0
+    fi
+
+    local plugins_to_delete_count
+    plugins_to_delete_count=$(echo "$plugins_to_delete" | wc -l | xargs)
+
+    echo "🔎 Found ${plugins_to_delete_count} plugin(s) to delete:"
+    echo "$plugins_to_delete"
+    echo
+
+    if ! "$GUM_CMD" confirm "Proceed with deletion?"; then
+        echo "Operation cancelled by user."
+        return 0
+    fi
+
+    while IFS= read -r plugin; do
+        if [ -n "$plugin" ]; then
+            echo "   - Deleting '$plugin'..."
+            "$WP_CLI_CMD" plugin delete "$plugin"
+        fi
+    done <<< "$plugins_to_delete"
+
+    echo "✨ Plugin cleanup complete."
+}
+
+# ----------------------------------------------------
 #  Analyzes disk usage using rclone.
 # ----------------------------------------------------
 function clean_disk() {

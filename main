@@ -673,6 +673,7 @@ function show_command_help() {
             echo "Usage: _do clean <subcommand>"
             echo
             echo "Subcommands:"
+            echo "  plugins   Deletes all inactive plugins."
             echo "  themes    Deletes all inactive themes except for the latest default WordPress theme."
             echo "  disk      Provides an interactive disk usage analysis for the current directory."
             ;;
@@ -1110,6 +1111,9 @@ function main() {
         clean)
             local arg1="${positional_args[1]}"
             case "$arg1" in
+                plugins)
+                    clean_plugins
+                    ;;
                 themes)
                     clean_themes
                     ;;
