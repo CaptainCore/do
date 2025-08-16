@@ -22,10 +22,14 @@ function run_dump() {
 
     local OUTPUT_BASENAME
     OUTPUT_BASENAME=$(basename "$SEARCH_DIR")
+    local OUTPUT_FILE
     if [ "$OUTPUT_BASENAME" == "." ]; then
-        OUTPUT_BASENAME="dump"
+        # If searching in the current dir, use the folder's name for the output file.
+        OUTPUT_BASENAME=$(basename "$(pwd)")
+        OUTPUT_FILE="${OUTPUT_BASENAME}-dump.txt"
+    else
+        OUTPUT_FILE="${OUTPUT_BASENAME}.txt"
     fi
-    local OUTPUT_FILE="${OUTPUT_BASENAME}.txt"
 
     # --- 3. Process Files ---
     > "$OUTPUT_FILE"
