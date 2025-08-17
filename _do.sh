@@ -8,7 +8,7 @@
 # ----------------------------------------------------
 
 # --- Global Variables ---
-CAPTAINCORE_DO_VERSION="1.2"
+CAPTAINCORE_DO_VERSION="1.3"
 GUM_VERSION="0.14.4"
 CWEBP_VERSION="1.5.0"
 RCLONE_VERSION="1.69.3"
@@ -612,16 +612,16 @@ function _is_webp() {
     # Determine which method to use, but only do it once.
     if [[ -z "$IDENTIFY_METHOD" ]]; then
         if command -v identify &> /dev/null; then
-            echo "Using 'identify' command for image type checking." >&2
-            IDENTIFY_METHOD="identify"
+            export IDENTIFY_METHOD="identify"
         else
-            echo "Warning: 'identify' command not found. Falling back to PHP check." >&2
-            IDENTIFY_METHOD="php"
+            export IDENTIFY_METHOD="php"
         fi
     fi
 
     # Execute the chosen method
     if [[ "$IDENTIFY_METHOD" == "identify" ]]; then
+        # Return false if the file doesn't exist to prevent errors.
+        if [ ! -f "$1" ]; then return 1; fi
         if [[ "$(identify -format "%m" "$1")" == "WEBP" ]]; then
             return 0 # It is a WebP file
         else
@@ -673,6 +673,7 @@ function show_command_help() {
             echo "Usage: _do clean <subcommand>"
             echo
             echo "Subcommands:"
+            echo "  plugins   Deletes all inactive plugins."
             echo "  themes    Deletes all inactive themes except for the latest default WordPress theme."
             echo "  disk      Provides an interactive disk usage analysis for the current directory."
             ;;
@@ -753,7 +754,10 @@ function show_command_help() {
         convert-to-webp)
             echo "Finds and converts large images (JPG, PNG) to WebP format."
             echo
-            echo "Usage: _do convert-to-webp [--all]"
+            echo "Usage: _do convert-to-webp [folder] [--all]"
+            echo
+            echo "Arguments:"
+            echo "  [folder] (Optional) The folder to convert. Defaults to 'wp-content/uploads'."
             echo
             echo "Flags:"
             echo "  --all    Convert all images, regardless of size. Defaults to images > 1MB."
@@ -883,6 +887,17 @@ function show_command_help() {
             echo "Subcommands:"
             echo "  check     Runs a check to find themes or plugins causing WP-CLI warnings."
             ;;
+        zip)
+            echo "Creates a zip archive of a specified folder."
+            echo
+            echo "Usage: _do zip \"<folder>\""
+            echo
+            echo "Arguments:"
+            echo "  <folder>  (Required) The folder to be archived."
+            echo
+            echo "If the folder is a WordPress installation, a public URL to the zip file will be provided."
+            echo "Otherwise, the local file path and size will be displayed."
+            ;;
         *)
             echo "Error: Unknown command '$cmd' for help." >&2
             echo ""
@@ -925,6 +940,7 @@ function show_usage() {
     echo "  vault               Manages secure snapshots in a remote Restic repository."
     echo "  version             Displays the current version of the _do script."
     echo "  wpcli               Checks for and identifies sources of WP-CLI warnings."
+    echo "  zip                 Creates a zip archive of a specified folder."
     echo ""
     echo "Run '_do help <command>' for more information on a specific command."
 }
@@ -1110,6 +1126,9 @@ function main() {
         clean)
             local arg1="${positional_args[1]}"
             case "$arg1" in
+                plugins)
+                    clean_plugins
+                    ;;
                 themes)
                     clean_themes
                     ;;
@@ -1168,7 +1187,8 @@ function main() {
             esac
             ;;
         convert-to-webp)
-            convert_to_webp "$all_files_flag"
+            # Pass the optional folder (positional_args[1]) and the --all flag
+            convert_to_webp "${positional_args[1]}" "$all_files_flag"
             ;;
         dump)
             # There should be exactly 2 positional args total: 'dump' and the pattern.
@@ -1360,6 +1380,9 @@ function main() {
                     exit 0
                     ;;
             esac
+            ;;
+        zip)
+            run_zip "${positional_args[1]}"
             ;;
         *)
             echo "Error: Unknown command '$command'." >&2
@@ -2330,6 +2353,76 @@ function clean_themes() {
 }
 
 # ----------------------------------------------------
+#  Deletes inactive plugins.
+#  On multisite, only deletes plugins not active on any site.
+# ----------------------------------------------------
+function clean_plugins() {
+    # --- Pre-flight checks ---
+    if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "❌ Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! setup_gum; then return 1; fi
+
+    echo "🚀 Cleaning inactive plugins..."
+
+    # --- Multisite vs. Single Site Logic ---
+    if "$WP_CLI_CMD" core is-installed --network --quiet; then
+        echo "ℹ️ Multisite installation detected. Finding plugins that are not active on any site..."
+
+        # Get all installed plugins (slugs)
+        local all_installed_plugins
+        all_installed_plugins=$("$WP_CLI_CMD" plugin list --field=name)
+
+        # Get all network-activated plugins
+        local network_active_plugins
+        network_active_plugins=$("$WP_CLI_CMD" plugin list --network --status=active --field=name)
+
+        # Get all plugins active on individual sites
+        local site_active_plugins
+        site_active_plugins=$("$WP_CLI_CMD" site list --field=url --format=ids | xargs -I % "$WP_CLI_CMD" plugin list --url=% --status=active --field=name)
+
+        # Combine all active plugins (network + site-specific) and get a unique, sorted list
+        local all_active_plugins
+        all_active_plugins=$(echo -e "${network_active_plugins}\n${site_active_plugins}" | sort -u | grep -v '^$')
+
+        # Find plugins that are in the installed list but not in the combined active list
+        local plugins_to_delete
+        plugins_to_delete=$(comm -23 <(echo "$all_installed_plugins" | sort) <(echo "$all_active_plugins" | sort))
+
+    else
+        echo "ℹ️ Single site installation detected. Finding inactive plugins..."
+        # On a single site, 'inactive' is sufficient
+        local plugins_to_delete
+        plugins_to_delete=$("$WP_CLI_CMD" plugin list --status=inactive --field=name)
+    fi
+
+    if [ -z "$plugins_to_delete" ]; then
+        echo "✅ No inactive plugins found to delete."
+        return 0
+    fi
+
+    local plugins_to_delete_count
+    plugins_to_delete_count=$(echo "$plugins_to_delete" | wc -l | xargs)
+
+    echo "🔎 Found ${plugins_to_delete_count} plugin(s) to delete:"
+    echo "$plugins_to_delete"
+    echo
+
+    if ! "$GUM_CMD" confirm "Proceed with deletion?"; then
+        echo "Operation cancelled by user."
+        return 0
+    fi
+
+    while IFS= read -r plugin; do
+        if [ -n "$plugin" ]; then
+            echo "   - Deleting '$plugin'..."
+            "$WP_CLI_CMD" plugin delete "$plugin"
+        fi
+    done <<< "$plugins_to_delete"
+
+    echo "✨ Plugin cleanup complete."
+}
+
+# ----------------------------------------------------
 #  Analyzes disk usage using rclone.
 # ----------------------------------------------------
 function clean_disk() {
@@ -2345,31 +2438,55 @@ function clean_disk() {
 #  WebP format.
 # ----------------------------------------------------
 function convert_to_webp() {
-    local all_files_flag="$1"
+    # The target directory is the first positional argument.
+    # The --all flag is passed as the second argument from main.
+    local target_dir_arg="$1"
+    local all_files_flag="$2"
     echo "🚀 Starting WebP Conversion Process 🚀"
 
+    # --- Pre-flight Checks ---
     if ! setup_cwebp; then
         echo "Aborting conversion: cwebp setup failed." >&2
         return 1
     fi
 
-    local uploads_dir="wp-content/uploads"
-    if [ ! -d "$uploads_dir" ]; then
-        echo "❌ Error: Cannot find '$uploads_dir' directory." >&2
+    # --- Initialize and Report Identify Method ---
+    # Prime the _is_webp function to determine the method and export the choice.
+    _is_webp ""
+    # Now that IDENTIFY_METHOD is set, report the choice to the user once.
+    if [[ "$IDENTIFY_METHOD" == "identify" ]]; then
+        echo "Using 'identify' command for image type checking."
+    else
+        echo "Warning: 'identify' command not found. Falling back to PHP check."
+    fi
+
+    # --- Determine target directory ---
+    local target_dir="wp-content/uploads"
+    if [ -n "$target_dir_arg" ]; then
+        target_dir="$target_dir_arg"
+        echo "Targeting custom directory: $target_dir"
+    else
+        echo "Targeting default directory: $target_dir"
+    fi
+
+    if [ ! -d "$target_dir" ]; then
+        echo "❌ Error: Cannot find '$target_dir' directory." >&2
         return 1
     fi
 
+    # --- Size and File Discovery ---
     local before_size
-    before_size="$(du -sh "$uploads_dir" | awk '{print $1}')"
-    echo "Current uploads size: $before_size"
+    before_size="$(du -sh "$target_dir" | awk '{print $1}')"
+    echo "Current directory size: $before_size"
 
     local size_limit_mb=1
     local message="larger than ${size_limit_mb}MB"
-    local find_args=("$uploads_dir" -type f)
-    if [[ "$all_files_flag" != "true" ]]; then
-        find_args+=(-size "+${size_limit_mb}M")
-    else
+    local find_args=("$target_dir" -type f)
+
+    if [[ "$all_files_flag" == "true" ]]; then
         message="of all sizes"
+    else
+        find_args+=(-size "+${size_limit_mb}M")
     fi
     find_args+=(\( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \))
 
@@ -2382,39 +2499,83 @@ function convert_to_webp() {
     fi
     local count
     count=$(echo "$files" | wc -l | xargs)
-    echo "Found $count image(s) ${message} to process..."
+    echo "Found $count image(s) ${message} to process using up to 5 concurrent threads..."
     echo ""
 
-    local processed_count=0
-    echo "$files" | while IFS= read -r file; do
-        processed_count=$((processed_count + 1))
+    # --- Helper function for processing a single image ---
+    # This function will be run in the background for each image.
+    _process_single_image() {
+        local file="$1"
+        local current_num="$2"
+        local total_num="$3"
+
+        # The _is_webp function checks if the file is already in WebP format.
         if _is_webp "$file"; then
-            echo "⚪️ Skipping ${processed_count}/${count} (already WebP): $file"
-            continue
+            echo "⚪️ Skipping ${current_num}/${total_num} (already WebP): $file"
+            return
         fi
 
         local temp_file="${file}.temp.webp"
         local before_file_size
         before_file_size=$(ls -lh "$file" | awk '{print $5}')
 
+        # The actual conversion command, output is suppressed for a cleaner log.
         "$CWEBP_CMD" -q 80 "$file" -o "$temp_file" > /dev/null 2>&1
+
+        # Check if the conversion was successful and the new file has content.
         if [ -s "$temp_file" ]; then
             mv "$temp_file" "$file"
             local after_file_size
             after_file_size=$(ls -lh "$file" | awk '{print $5}')
-            echo "✅ Converted ${processed_count}/${count} ($before_file_size -> $after_file_size): $file"
+            echo "✅ Converted ${current_num}/${total_num} ($before_file_size -> $after_file_size): $file"
         else
+            # Cleanup failed temporary file and report the failure.
             rm -f "$temp_file"
-            echo "❌ Failed ${processed_count}/${count}: $file"
+            echo "❌ Failed ${current_num}/${total_num}: $file"
         fi
-    done
+    }
 
+    # Export the helper function and its dependencies so they are available to the subshells.
+    export -f _process_single_image
+    export -f _is_webp
+    export -f _is_webp_php
+    export -f setup_wp_cli
+
+    # --- Concurrent Processing Loop ---
+    local max_jobs=5
+    local job_count=0
+    local processed_count=0
+
+    # Use process substitution to avoid creating a subshell for the while loop.
+    # This ensures the main script's 'wait' command can see all background jobs.
+    while IFS= read -r file; do
+        processed_count=$((processed_count + 1))
+        
+        # Run the processing function in the background.
+        _process_single_image "$file" "$processed_count" "$count" &
+
+        # On Linux, use 'wait -n' for a sliding window of jobs.
+        # On macOS, bash doesn't support 'wait -n', so we skip this
+        # and let the final 'wait' handle all jobs at once.
+        if [[ "$(uname)" != "Darwin" ]]; then
+            job_count=$((job_count + 1))
+            if (( job_count >= max_jobs )); then
+                wait -n
+                job_count=$((job_count - 1))
+            fi
+        fi
+    done < <(echo "$files")
+
+    # Wait for all remaining background jobs to complete before proceeding.
+    wait
+
+    # --- Final Summary ---
     echo ""
     local after_size
-    after_size="$(du -sh "$uploads_dir" | awk '{print $1}')"
+    after_size="$(du -sh "$target_dir" | awk '{print $1}')"
     echo "✅ Bulk conversion complete!"
     echo "-----------------------------------------------------"
-    echo "   Uploads folder size reduced from $before_size to $after_size."
+    echo "   Directory size reduced from $before_size to $after_size."
     echo "-----------------------------------------------------"
 }
 # ----------------------------------------------------
@@ -3079,10 +3240,14 @@ function run_dump() {
 
     local OUTPUT_BASENAME
     OUTPUT_BASENAME=$(basename "$SEARCH_DIR")
+    local OUTPUT_FILE
     if [ "$OUTPUT_BASENAME" == "." ]; then
-        OUTPUT_BASENAME="dump"
+        # If searching in the current dir, use the folder's name for the output file.
+        OUTPUT_BASENAME=$(basename "$(pwd)")
+        OUTPUT_FILE="${OUTPUT_BASENAME}-dump.txt"
+    else
+        OUTPUT_FILE="${OUTPUT_BASENAME}.txt"
     fi
-    local OUTPUT_FILE="${OUTPUT_BASENAME}.txt"
 
     # --- 3. Process Files ---
     > "$OUTPUT_FILE"
@@ -6064,6 +6229,103 @@ function wpcli_check() {
         echo "ℹ️ Could not isolate a single plugin or theme as the source. The issue might be from a combination of plugins or WordPress core itself."
     fi
     echo "✅ Check complete."
+}
+
+# ----------------------------------------------------
+#  Creates a zip archive of a specified folder.
+# ----------------------------------------------------
+function run_zip() {
+    local target_folder="$1"
+
+    # --- 1. Validate Input ---
+    if [ -z "$target_folder" ]; then
+        echo "Error: No folder specified." >&2
+        echo "Usage: _do zip \"<folder>\"" >&2
+        return 1
+    fi
+
+    if [ ! -d "$target_folder" ]; then
+        echo "Error: Folder '$target_folder' not found." >&2
+        return 1
+    fi
+
+    if ! command -v realpath &> /dev/null; then
+        echo "Error: 'realpath' command is required but not found." >&2
+        return 1
+    fi
+
+    # --- 2. Determine Paths and Names ---
+    local full_target_path
+    full_target_path=$(realpath "$target_folder")
+    local parent_dir
+    parent_dir=$(dirname "$full_target_path")
+    local dir_to_zip
+    dir_to_zip=$(basename "$full_target_path")
+    local output_zip_file="${dir_to_zip}.zip"
+    local output_zip_path="${parent_dir}/${output_zip_file}"
+
+    # Prevent zipping to the same name if it already exists
+    if [ -f "$output_zip_path" ]; then
+        echo "Error: A file named '${output_zip_file}' already exists in the target directory." >&2
+        return 1
+    fi
+
+    echo "🚀 Creating zip archive for '${dir_to_zip}'..."
+
+    # --- 3. Create Zip Archive ---
+    # Change to the parent directory to ensure clean paths inside the zip
+    local original_dir
+    original_dir=$(pwd)
+    cd "$parent_dir" || { echo "Error: Could not change to directory '$parent_dir'." >&2; return 1; }
+
+    # Create the zip file, excluding common unnecessary files
+    if ! zip -r "$output_zip_file" "$dir_to_zip" -x "*.git*" "*.DS_Store*" "*node_modules*" > /dev/null; then
+        echo "Error: Failed to create zip archive." >&2
+        cd "$original_dir"
+        return 1
+    fi
+
+    # Return to the original directory
+    cd "$original_dir"
+
+    # --- 4. Final Report ---
+    local file_size
+    file_size=$(du -h "$output_zip_path" | cut -f1 | xargs)
+    local final_output_path="$output_zip_path"
+
+    # --- WordPress URL Logic ---
+    local zip_url=""
+    # Silently check if WP-CLI is available and we're in a WordPress installation.
+    # This check works by traversing up from the current directory.
+    if setup_wp_cli &>/dev/null && "$WP_CLI_CMD" core is-installed --quiet 2>/dev/null; then
+        local wp_home
+        wp_home=$("$WP_CLI_CMD" option get home --skip-plugins --skip-themes 2>/dev/null)
+        
+        if [ -n "$wp_home" ]; then
+            local wp_root_path
+            # Use `wp config path` to reliably find the WP root.
+            wp_root_path=$("$WP_CLI_CMD" config path --quiet 2>/dev/null)
+            
+            if [ -n "$wp_root_path" ] && [ -f "$wp_root_path" ]; then
+                wp_root_path=$(dirname "$wp_root_path")
+                
+                # The zip file is created in `parent_dir`. We need its path relative to the WP root.
+                local relative_zip_dir_path
+                relative_zip_dir_path=${parent_dir#"$wp_root_path"}
+                
+                # Construct the final URL
+                zip_url="${wp_home%/}${relative_zip_dir_path}/${output_zip_file}"
+            fi
+        fi
+    fi
+    # --- End WordPress URL Logic ---
+
+    echo "✅ Zip archive created successfully."
+    if [ -n "$zip_url" ]; then
+        echo "   Link: $zip_url ($file_size)"
+    else
+        echo "   File: $final_output_path ($file_size)"
+    fi
 }
 
 #  Pass all script arguments to the main function.

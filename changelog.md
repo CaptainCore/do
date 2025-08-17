@@ -2,6 +2,25 @@
 
 An analysis of the two script versions reveals significant enhancements in version 1.2, focusing on new features, improved dependency management, and increased command organization.
 
+## [1.3] - 2025-08-16
+
+### Added
+
+* **New `zip` Command:** A utility to create a zip archive of any specified folder. If the command is run within a WordPress installation, it also provides a public URL for the generated archive, making it easy to share.
+* **New `clean plugins` Subcommand:** This new subcommand finds and deletes all inactive plugins. It is designed to work safely on both single-site and multisite WordPress installations, ensuring it only removes plugins that are not active on any site in a network.
+
+### Changed
+
+* **`convert-to-webp` Command Overhaul:** The image conversion utility has been significantly enhanced:
+    * It now accepts an optional folder path, allowing users to convert images in directories other than the default `wp-content/uploads`.
+    * Performance has been dramatically improved by processing multiple images in parallel, significantly reducing the time required for large batches of images.
+    * The script now provides clearer feedback to the user by indicating which image detection method (`identify` or a PHP fallback) is being used.
+* **`dump` Command Naming:** The output file from the `dump` command is now more intelligently named based on the source directory (e.g., `my-plugin.txt`), rather than a generic filename.
+
+### Fixed
+
+* **Image Conversion Reliability:** The `convert-to-webp` command is now more robust. It verifies that an image file exists before attempting to process it, which prevents potential errors when encountering broken file paths.
+
 ## [1.2] - 2025-07-10
 
 ### Added
