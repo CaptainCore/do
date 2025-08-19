@@ -738,7 +738,7 @@ function show_command_help() {
             echo
             echo "Subcommands:"
             echo "  recent-files [days]  Finds files modified within the last <days>. Defaults to 1 day."
-            echo "  slow-plugins         Identifies plugins that may be slowing down WP-CLI."
+            echo "  slow-plugins [path]  Identifies plugins slowing down WP-CLI. Optionally check a specific page path (e.g., \"/contact\")."
             echo "  hidden-plugins       Detects active plugins that may be hidden from the standard list."
             echo "  malware              Scans for malware and verifies core/plugin file integrity."
             echo "  php-tags [dir]       Finds outdated PHP short tags ('<?'). Defaults to 'wp-content/'."
@@ -1210,7 +1210,7 @@ function main() {
                     find_recent_files "${positional_args[2]}"
                     ;;
                 slow-plugins)
-                    find_slow_plugins
+                    find_slow_plugins "${positional_args[2]}"
                     ;;
                 hidden-plugins)
                     find_hidden_plugins
