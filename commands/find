@@ -102,6 +102,11 @@ function find_slow_plugins() {
     echo "---------------------------------------------------------------------------------"
     local results=()
     for plugin in "${active_plugins[@]}"; do
+        # Skip the render-command plugin itself when using the render method
+        if [[ -n "$page_to_check" && "$plugin" == "render-command" ]]; then
+            continue
+        fi
+
         local time_with_skip_s
         time_with_skip_s=$(_get_wp_execution_time "${base_command_args[@]}" "${skip_argument}=$plugin")
 
@@ -164,6 +169,7 @@ function find_hidden_plugins() {
     local raw_count
     raw_count=$(echo "$active_plugins_raw" | wc -l | xargs)
 
+    
     # Compare the counts of the two lists.
     if [[ "$regular_count" == "$raw_count" ]]; then
         echo "✅ No hidden plugins detected. The standard and raw plugin lists match ($regular_count plugins)."
