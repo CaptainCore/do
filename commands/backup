@@ -3,6 +3,7 @@
 # ----------------------------------------------------
 function full_backup() {
     local target_folder="$1"
+    local quiet_flag="$2"
     if [ -z "$target_folder" ]; then echo "Error: Please provide a folder path." >&2; echo "Usage: _do backup <folder>" >&2; return 1; fi
     if ! command -v realpath &> /dev/null; then echo "Error: 'realpath' command not found. Please install it." >&2; return 1; fi
     if [ ! -d "$target_folder" ]; then echo "Error: Folder '$target_folder' not found." >&2; return 1; fi
@@ -12,7 +13,7 @@ function full_backup() {
     local parent_dir; parent_dir=$(dirname "$full_target_path")
     local site_dir_name; site_dir_name=$(basename "$full_target_path")
 
-    local today; today=$(date +"%Y-%m-%d"); local random; random=$(head /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 7); local backup_filename="${today}_${random}.zip"; local original_dir;
+    local today; today=$(date +"%Y-%m-%d"); local random; random=$(openssl rand -hex 4 | head -c 7); local backup_filename="${today}_${random}.zip"; local original_dir;
     original_dir=$(pwd)
 
     #  Change to the parent directory for consistent relative paths in the zip
@@ -22,14 +23,17 @@ function full_backup() {
     local home_url; home_url=$("$WP_CLI_CMD" option get home --path="$site_dir_name" --skip-plugins --skip-themes); local name; name=$("$WP_CLI_CMD" option get blogname --path="$site_dir_name" --skip-plugins --skip-themes);
     local database_file="db_export.sql"
 
-    echo "Exporting database for '$name'...";
-    if ! "$WP_CLI_CMD" db export "$site_dir_name/$database_file" --path="$site_dir_name" --add-drop-table --default-character-set=utf8mb4; then
+    if [[ "$quiet_flag" != "true" ]]; then
+        echo "Exporting database for '$name'...";
+    fi
+    if ! "$WP_CLI_CMD" db export "$site_dir_name/$database_file" --path="$site_dir_name" --add-drop-table --default-character-set=utf8mb4 > /dev/null; then
         echo "Error: Database export failed." >&2
         cd "$original_dir"
         return 1
     fi
-
-    echo "Creating zip archive...";
+    if [[ "$quiet_flag" != "true" ]]; then
+        echo "Creating zip archive...";
+    fi
     #  Create the zip in the parent directory, zipping the site directory
     if ! zip -r "$backup_filename" "$site_dir_name" -x "$site_dir_name/wp-content/updraft/*" > /dev/null; then
         echo "Error: Failed to zip files." >&2
@@ -51,14 +55,21 @@ function full_backup() {
     local final_backup_location="$site_dir_name/$backup_filename"
 
     cd "$original_dir"
+    local final_backup_location="$full_target_path/$backup_filename"
+    local final_url="${home_url}/${backup_filename}"
 
-    echo "-----------------------------------------------------";
-    echo "✅ Full site backup complete!";
-    echo "   Name: $name";
-    echo "   Location: $final_backup_location";
-    echo "   Size: $size";
-    echo "   URL: ${home_url}/${backup_filename}";
-    echo "-----------------------------------------------------";
-    echo "When done, remember to remove the backup file.";
-    echo "rm -f \"$full_target_path/$backup_filename\""
+    if [[ "$quiet_flag" == "true" ]]; then
+        echo "$final_url"
+        return 0
+    fi
+
+    echo "-----------------------------------------------------"
+    echo "✅ Full site backup complete!"
+    echo "   Name: $name"
+    echo "   Location: $final_backup_location"
+    echo "   Size: $size"
+    echo "   URL: $final_url"
+    echo "-----------------------------------------------------"
+    echo "When done, remember to remove the backup file."
+    echo "rm -f \"$final_backup_location\""
 }

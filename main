@@ -652,7 +652,10 @@ function show_command_help() {
         backup)
             echo "Creates a full backup (files + DB) of a WordPress site."
             echo
-            echo "Usage: _do backup <folder>"
+            echo "Usage: _do backup <folder> [--quiet]"
+            echo
+            echo "Flags:"
+            echo "  --quiet    Suppress all informational output and print only the final backup URL."
             ;;
         checkpoint)
             echo "Manages versioned checkpoints of a WordPress installation's manifest."
@@ -1059,6 +1062,10 @@ function main() {
             exit 1
           fi
           ;;
+        --quiet)
+          quiet_flag=true
+          shift
+          ;;
         -*)
           #  This will catch unknown flags like --foo
           echo "Error: Unknown flag: $1" >&2
@@ -1092,7 +1099,7 @@ function main() {
     #  This routes to the correct function based on the parsed command.
     case "$command" in
         backup)
-            full_backup "${positional_args[1]}"
+            full_backup "${positional_args[1]}" "$quiet_flag"
             ;;
         checkpoint)
             local subcommand="${positional_args[1]}"
