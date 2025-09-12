@@ -42,7 +42,7 @@ The script will automatically download and install the following tools into a `~
 The easiest way to use CaptainCore `_do` is by defining an alias to [captaincore.io/do](https://captaincore.io/do).
 
 ```bash
-alias _do='bash <(curl -sL https://captaincore.io/do)'
+alias _do='curl -sL https://captaincore.io/do | bash -s'
 ```
 
 That allows you to use `_do` without installing anything. The alias will last for the duration of your terminal session. Want to make it persistent? Then add it to your shell's startup file.
@@ -56,7 +56,7 @@ That allows you to use `_do` without installing anything. The alias will last fo
 2.  **Add the alias line to the file:**
 
     ```bash
-    alias _do='bash <(curl -sL https://captaincore.io/do)'
+    alias _do='curl -sL https://captaincore.io/do | bash -s'
     ```
 
 3.  **Reload your shell configuration.**
@@ -68,7 +68,7 @@ You can execute the script directly for one-off commands. This is help for SSH i
 
 ```bash
 # Example: Remotely check the script version
-ssh username@ip-address "bash <(curl -sL https://captaincore.io/do) version"
+ssh username@ip-address "curl -sL https://captaincore.io/do | bash -s version"
 ```
 
 ## Usage
