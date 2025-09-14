@@ -156,7 +156,9 @@ function migrate_site() {
     cd "$home_directory"
 
     # --- Database Migration ---
-    local database; database=$(find "$restore_dir" -type f -name '*.sql' -printf '%T@ %p\n' | sort -n | tail -1 | cut -f2- -d" ")
+    local database
+    database=$(find "$restore_dir" "$home_directory" -type f -name '*.sql' -print0 | xargs -0 stat -f '%m %N' | sort -n | tail -1 | cut -f2- -d" ")
+
     if [[ -z "$database" || ! -f "$database" ]]; then
         echo "⚠️ Warning: No .sql file found in backup. Skipping database import.";
     else
