@@ -2,25 +2,37 @@
 #  Creates a full backup of a WordPress site (files + database).
 # ----------------------------------------------------
 function full_backup() {
+    # --- 1. Argument Parsing ---
     local target_folder="$1"
     local quiet_flag="$2"
-    if [ -z "$target_folder" ]; then echo "Error: Please provide a folder path." >&2; echo "Usage: _do backup <folder>" >&2; return 1; fi
+    shift 2 # Move past the first two arguments
+    local exclude_patterns=("$@") # The rest of the arguments are the exclude patterns
+
+    # --- 2. Validation ---
+    if [ -z "$target_folder" ]
+    then echo "Error: Please provide a folder path." >&2; echo "Usage: _do backup <folder>" >&2; return 1;
+    fi
     if ! command -v realpath &> /dev/null; then echo "Error: 'realpath' command not found. Please install it." >&2; return 1; fi
     if [ ! -d "$target_folder" ]; then echo "Error: Folder '$target_folder' not found." >&2; return 1; fi
 
+    # --- 3. Setup Paths and Filenames ---
     #  Resolve the absolute path to handle cases like "."
     local full_target_path; full_target_path=$(realpath "$target_folder")
     local parent_dir; parent_dir=$(dirname "$full_target_path")
     local site_dir_name; site_dir_name=$(basename "$full_target_path")
 
-    local today; today=$(date +"%Y-%m-%d"); local random; random=$(openssl rand -hex 4 | head -c 7); local backup_filename="${today}_${random}.zip"; local original_dir;
-    original_dir=$(pwd)
+    local today; today=$(date +"%Y-%m-%d")
+    local random; random=$(openssl rand -hex 4 | head -c 7)
+    local backup_filename="${today}_${random}.zip"
+    local original_dir; original_dir=$(pwd)
 
     #  Change to the parent directory for consistent relative paths in the zip
     cd "$parent_dir" || return 1
 
+    # --- 4. Database Export ---
     if ! setup_wp_cli; then echo "Error: wp-cli is not installed." >&2; cd "$original_dir"; return 1; fi
-    local home_url; home_url=$("$WP_CLI_CMD" option get home --path="$site_dir_name" --skip-plugins --skip-themes); local name; name=$("$WP_CLI_CMD" option get blogname --path="$site_dir_name" --skip-plugins --skip-themes);
+    local home_url; home_url=$("$WP_CLI_CMD" option get home --path="$site_dir_name" --skip-plugins --skip-themes)
+    local name; name=$("$WP_CLI_CMD" option get blogname --path="$site_dir_name" --skip-plugins --skip-themes)
     local database_file="db_export.sql"
 
     if [[ "$quiet_flag" != "true" ]]; then
@@ -33,9 +45,22 @@ function full_backup() {
     fi
     if [[ "$quiet_flag" != "true" ]]; then
         echo "Creating zip archive...";
+        if [ ${#exclude_patterns[@]} -gt 0 ]; then
+            echo "Excluding the following patterns:"
+            for pattern in "${exclude_patterns[@]}"; do
+                echo "  - $pattern"
+            done
+        fi
     fi
+
+    # --- 5. Zip Archive Creation ---
+    local zip_exclude_args=()
+    zip_exclude_args+=(-x "$site_dir_name/wp-content/updraft/*") # Add default exclude
+    for pattern in "${exclude_patterns[@]}"; do
+        zip_exclude_args+=(-x "$site_dir_name/$pattern*") # Add user-defined excludes
+    done
     #  Create the zip in the parent directory, zipping the site directory
-    if ! zip -r "$backup_filename" "$site_dir_name" -x "$site_dir_name/wp-content/updraft/*" > /dev/null; then
+    if ! zip -r "$backup_filename" "$site_dir_name" "${zip_exclude_args[@]}" > /dev/null; then
         echo "Error: Failed to zip files." >&2
         rm -f "$site_dir_name/$database_file"
         cd "$original_dir"
@@ -47,8 +72,9 @@ function full_backup() {
         zip "$backup_filename" "$site_dir_name/wp-config.php" > /dev/null
     fi
 
-    #  Cleanup and Final Steps
-    local size; size=$(ls -lh "$backup_filename" | awk '{print $5}')
+    # --- 6. Cleanup and Final Report ---
+    local size
+    size=$(ls -lh "$backup_filename" | awk '{print $5}')
     rm -f "$site_dir_name/$database_file"
     mv "$backup_filename" "$site_dir_name/"
 

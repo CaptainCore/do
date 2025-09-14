@@ -655,6 +655,8 @@ function show_command_help() {
             echo "Usage: _do backup <folder> [--quiet]"
             echo
             echo "Flags:"
+            echo "  --exclude=<pattern>  A file or folder pattern to exclude, relative to the backup folder."
+            echo "                     Can be used multiple times (e.g., --exclude=\"wp-content/uploads/\")."             
             echo "  --quiet    Suppress all informational output and print only the final backup URL."
             ;;
         checkpoint)
@@ -997,6 +999,7 @@ function main() {
     local domain_flag=""
     local output_flag=""
     local exclude_patterns=()
+    local backup_exclude_patterns=()
     local positional_args=()
     
     while [[ $# -gt 0 ]]; do
@@ -1062,6 +1065,10 @@ function main() {
             exit 1
           fi
           ;;
+        --exclude=*)
+          backup_exclude_patterns+=("${1#*=}")
+          shift
+          ;;
         --quiet)
           quiet_flag=true
           shift
@@ -1099,7 +1106,7 @@ function main() {
     #  This routes to the correct function based on the parsed command.
     case "$command" in
         backup)
-            full_backup "${positional_args[1]}" "$quiet_flag"
+            full_backup "${positional_args[1]}" "$quiet_flag" "${backup_exclude_patterns[@]}"
             ;;
         checkpoint)
             local subcommand="${positional_args[1]}"
