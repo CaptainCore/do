@@ -8,7 +8,7 @@ function migrate_site() {
     local backup_url="$1"
     local update_urls_flag="$2"
 
-    echo "🚀 Starting Site Migration 🚀"
+    echo "🚀 Starting Site Migration ..."
 
     # --- Pre-flight Checks ---
     if ! setup_wp_cli; then echo "❌ Error: WP-CLI not found." >&2; return 1; fi
@@ -164,8 +164,23 @@ function migrate_site() {
     else
         echo "Importing database from $database..."
         local search_privacy; search_privacy=$( "$WP_CLI_CMD" option get blog_public --skip-plugins --skip-themes )
+
+        # 1. Get database credentials from wp-config.php
+        local db_name; db_name=$("$WP_CLI_CMD" config get DB_NAME --skip-plugins --skip-themes)
+        local db_user; db_user=$("$WP_CLI_CMD" config get DB_USER --skip-plugins --skip-themes)
+        local db_pass; db_pass=$("$WP_CLI_CMD" config get DB_PASSWORD --skip-plugins --skip-themes)
+        local db_host; db_host=$("$WP_CLI_CMD" config get DB_HOST --skip-plugins --skip-themes)
+
+        # 2. Reset the database first
         "$WP_CLI_CMD" db reset --yes --skip-plugins --skip-themes
-        "$WP_CLI_CMD" db import "$database" --skip-plugins --skip-themes
+
+        # 3. Import using the mysql client with the max_allowed_packet flag
+        if ! mysql --host="$db_host" -u"$db_user" -p"$db_pass" --max_allowed_packet=512M "$db_name" < "$database"; then
+            echo "  Error: Database import failed. Please check the error message above." >&2
+            cd "$home_directory"
+            return 1
+        fi
+
         "$WP_CLI_CMD" cache flush --skip-plugins --skip-themes
         "$WP_CLI_CMD" option update blog_public "$search_privacy" --skip-plugins --skip-themes
 
