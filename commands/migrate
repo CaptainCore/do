@@ -38,6 +38,9 @@ function migrate_site() {
     cd "$restore_dir" || return 1
     
     local local_file_name; local_file_name=$(basename "$backup_url")
+    if [ -f "${home_directory}/${local_file_name}" ]; then
+        mv "${home_directory}/${local_file_name}" "${private_dir}/${local_file_name}"
+    fi
 
     #  Handle special URLs
     if [[ "$backup_url" == *"admin-ajax.php"* ]]; then
@@ -87,12 +90,12 @@ function migrate_site() {
         for working in *; do
             echo "$working"
             if [ -f "$home_directory/wp-content/mu-plugins/$working" ]; then
-            rm "$home_directory/wp-content/mu-plugins/$working"
+                rm "$home_directory/wp-content/mu-plugins/$working"
             fi
             if [ -d "$home_directory/wp-content/mu-plugins/$working" ]; then
-            rm -rf "$home_directory/wp-content/mu-plugins/$working"
+                rm -rf "$home_directory/wp-content/mu-plugins/$working"
             fi
-            mv "$working" "$home_directory/wp-content/mu-plugins/"
+                mv "$working" "$home_directory/wp-content/mu-plugins/"
         done
         cd "${private}/restore_${timedate}"
     fi
@@ -157,13 +160,32 @@ function migrate_site() {
 
     # --- Database Migration ---
     local database
-    database=$(find "$restore_dir" "$home_directory" -type f -name '*.sql' -print0 | xargs -0 stat -f '%m %N' | sort -n | tail -1 | cut -f2- -d" ")
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # macOS/BSD version using stat -f
+        database=$(find "$restore_dir" "$home_directory" -type f -name '*.sql' -print0 | xargs -0 stat -f '%m %N' | sort -n | tail -1 | cut -f2- -d" ")
+    else
+        # Linux version using find -printf
+        database=$(find "$restore_dir" "$home_directory" -type f -name '*.sql' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+    fi
 
     if [[ -z "$database" || ! -f "$database" ]]; then
         echo "⚠️ Warning: No .sql file found in backup. Skipping database import.";
     else
         echo "Importing database from $database..."
         local search_privacy; search_privacy=$( "$WP_CLI_CMD" option get blog_public --skip-plugins --skip-themes )
+
+        # Outputs table prefix and updates if different
+        cd "${restore_dir}/${wordpresspath}/../"
+        if [ -f wp-config.php ]; then
+            table_prefix=$( cat wp-config.php | grep table_prefix | perl -n -e '/\047(.+)\047/&& print $1' )
+        fi
+
+        cd "$home_directory"
+        current_table_prefix=$( wp config get table_prefix --skip-plugins --skip-themes )
+        if [[ $table_prefix != "" && $table_prefix != "$current_table_prefix" ]]; then
+            echo "Updating table prefix from $current_table_prefix to $table_prefix"
+            wp config set table_prefix $table_prefix --skip-plugins --skip-themes
+        fi
 
         # 1. Get database credentials from wp-config.php
         local db_name; db_name=$("$WP_CLI_CMD" config get DB_NAME --skip-plugins --skip-themes)
@@ -209,7 +231,7 @@ function migrate_site() {
         echo "$alter_queries" | "$WP_CLI_CMD" db query --skip-plugins --skip-themes
     fi
 
-    "$WP_CLI_CMD" rewrite flush --skip-plugins --skip-themes
+    "$WP_CLI_CMD" rewrite flush
     if "$WP_CLI_CMD" plugin is-active woocommerce --skip-plugins --skip-themes &>/dev/null; then
         "$WP_CLI_CMD" wc tool run regenerate_product_attributes_lookup_table --user=1 --skip-plugins --skip-themes
     fi
