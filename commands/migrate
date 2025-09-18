@@ -187,17 +187,11 @@ function migrate_site() {
             wp config set table_prefix $table_prefix --skip-plugins --skip-themes
         fi
 
-        # 1. Get database credentials from wp-config.php
-        local db_name; db_name=$("$WP_CLI_CMD" config get DB_NAME --skip-plugins --skip-themes)
-        local db_user; db_user=$("$WP_CLI_CMD" config get DB_USER --skip-plugins --skip-themes)
-        local db_pass; db_pass=$("$WP_CLI_CMD" config get DB_PASSWORD --skip-plugins --skip-themes)
-        local db_host; db_host=$("$WP_CLI_CMD" config get DB_HOST --skip-plugins --skip-themes)
-
-        # 2. Reset the database first
+        # Reset the database first
         "$WP_CLI_CMD" db reset --yes --skip-plugins --skip-themes
 
-        # 3. Import using the mysql client with the max_allowed_packet flag
-        if ! mysql --host="$db_host" -u"$db_user" -p"$db_pass" --max_allowed_packet=512M "$db_name" < "$database"; then
+        # Import using WP-CLI
+        if ! "$WP_CLI_CMD" db import "$database"; then
             echo "  Error: Database import failed. Please check the error message above." >&2
             cd "$home_directory"
             return 1
