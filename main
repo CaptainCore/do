@@ -996,6 +996,7 @@ function main() {
     local path_flag=""
     local all_files_flag=""
     local force_flag=""
+    local format_flag=""
     local domain_flag=""
     local output_flag=""
     local exclude_patterns=()
@@ -1046,6 +1047,10 @@ function main() {
           ;;
         --force)
           force_flag=true
+          shift
+          ;;
+        --format=*)
+          format_flag="${1#*=}"
           shift
           ;;
         --output)
@@ -1106,7 +1111,7 @@ function main() {
     #  This routes to the correct function based on the parsed command.
     case "$command" in
         backup)
-            full_backup "${positional_args[1]}" "$quiet_flag" "${backup_exclude_patterns[@]}"
+            full_backup "${positional_args[1]}" "$quiet_flag" "$format_flag" "${backup_exclude_patterns[@]}"
             ;;
         checkpoint)
             local subcommand="${positional_args[1]}"

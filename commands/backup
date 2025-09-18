@@ -5,7 +5,8 @@ function full_backup() {
     # --- 1. Argument Parsing ---
     local target_folder="$1"
     local quiet_flag="$2"
-    shift 2 # Move past the first two arguments
+    local format_flag="$3"
+    shift 3  # Move past the first two arguments
     local exclude_patterns=("$@") # The rest of the arguments are the exclude patterns
 
     # --- 2. Validation ---
@@ -84,6 +85,10 @@ function full_backup() {
     local final_backup_location="$full_target_path/$backup_filename"
     local final_url="${home_url}/${backup_filename}"
 
+    if [[ "$format_flag" == "filename" ]]; then
+        echo "$backup_filename"
+        return 0
+    fi
     if [[ "$quiet_flag" == "true" ]]; then
         echo "$final_url"
         return 0
