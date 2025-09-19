@@ -2,13 +2,13 @@
 #  Remotely installs the Disembark plugin, connects, and initiates a backup using an embedded Playwright script. 
 # ----------------------------------------------------
 function run_disembark() {
-    local target_url="$1"
+    local target_url_input="$1"
     local debug_flag="$2"
 
-    echo "🚀 Starting Disembark process for ${target_url}..."
+    echo "🚀 Starting Disembark process for ${target_url_input}..."
 
     # --- 1. Pre-flight Checks for disembark-cli ---
-    if [ -z "$target_url" ];then
+    if [ -z "$target_url_input" ];then
         echo "❌ Error: Missing required URL argument." >&2
         show_command_help "disembark"
         return 1
@@ -16,36 +16,60 @@ function run_disembark() {
 
     if ! setup_disembark; then return 1; fi 
 
-    # --- 2. Attempt backup with a potentially stored token ---
+    # --- 2. Smart URL Parsing ---
+    local base_url
+    local login_path
+    
+    # Check if the input URL contains /wp-admin or /wp-login.php
+    if [[ "$target_url_input" == *"/wp-admin"* || "$target_url_input" == *"/wp-login.php"* ]]; then
+        # If it's a backend URL, extract the base and the path
+        base_url=$(echo "$target_url_input" | sed -E 's#(https?://[^/]+).*#\1#')
+        login_path=$(echo "$target_url_input" | sed -E "s#$base_url##")
+        echo "   - Detected backend URL. Base: '$base_url', Path: '$login_path'"
+    # Handle URLs with a path component that don't end in a slash (potential custom login)
+    elif [[ "$target_url_input" == *"/"* && "${target_url_input: -1}" != "/" ]]; then
+        local path_part
+        # Use sed -n with 'p' to ensure it only outputs on a successful match
+        path_part=$(echo "$target_url_input" | sed -n -E 's#https?://[^/]+(/.*)#\1#p')
+
+        # If path_part is empty, it means there was no path after the domain (e.g., https://example.com)
+        if [ -z "$path_part" ]; then
+            base_url="${target_url_input%/}"
+            login_path="/wp-login.php"
+            echo "   - Homepage URL detected. Assuming default login path: '$login_path'"
+        # Check for deep links inside WordPress content directories
+        elif [[ "$path_part" == *"/wp-content"* || "$path_part" == *"/wp-includes"* ]]; then
+            base_url="$target_url_input"
+            login_path="/wp-login.php"
+            echo "   - Deep link detected. Assuming default login for base URL."
+        # Otherwise, assume it's a custom login path
+        else
+            base_url=$(echo "$target_url_input" | sed -E 's#(https?://[^/]+).*#\1#')
+            login_path="$path_part"
+            echo "   - Custom login path detected. Base: '$base_url', Path: '$login_path'"
+        fi
+    # Handle homepage URLs that might end with a slash
+    else
+        base_url="${target_url_input%/}" # Remove trailing slash if present
+        login_path="/wp-login.php"
+        echo "   - Homepage URL detected. Assuming default login path: '$login_path'"
+    fi
+
+
+    # --- 3. Attempt backup with a potentially stored token ---
     echo "✅ Attempting backup using a stored token..."
-    if "$DISEMBARK_CMD" backup "$target_url"; then
+    if "$DISEMBARK_CMD" backup "$base_url"; then
         echo "✨ Backup successful using a pre-existing token." 
         return 0
     fi
 
-    # --- 3. If backup fails, proceed to full browser authentication ---
+    # --- 4. If backup fails, proceed to full browser authentication ---
     echo "⚠️ Backup with stored token failed. A new connection token is likely required." 
     echo "Proceeding with browser authentication..."
 
     # --- Pre-flight Checks for browser automation ---
     if ! setup_playwright; then return 1; fi 
     if ! setup_gum; then return 1; fi 
-
-    # --- Get Credentials Interactively ---
-    echo "Please provide WordPress administrator credentials:"
-    local username
-    username=$(gum input --placeholder="Enter WordPress username...")
-    if [ -z "$username" ]; then
-        echo "No username provided. Aborting." >&2
-        return 1
-    fi
-
-    local password
-    password=$(gum input --placeholder="Enter WordPress password..." --password)
-    if [ -z "$password" ]; then
-        echo "No password provided. Aborting." >&2
-        return 1
-    fi
 
     # --- Define the Playwright script using a Heredoc ---
     local PLAYWRIGHT_SCRIPT
@@ -60,12 +84,15 @@ const path = require('path');
 const PLUGIN_ZIP_URL = 'https://github.com/DisembarkHost/disembark-connector/releases/latest/download/disembark-connector.zip';
 
 async function main() {
-  const [, , targetUrl, username, password, debugFlag] = process.argv;
+  const [, , baseUrl, loginPath, username, password, debugFlag] = process.argv;
 
-  if (!targetUrl || !username || !password) {
-    console.error('Usage: node disembark-browser.js <url> <username> <password> [debug]');
+  if (!baseUrl || !loginPath || !username || !password) {
+    console.error('Usage: node disembark-browser.js <baseUrl> <loginPath> <username> <password> [debug]');
     process.exit(1);
   }
+  
+  const loginUrl = baseUrl + loginPath;
+  const adminUrl = baseUrl + '/wp-admin/';
 
   const isHeadless = debugFlag !== 'true';
   const browser = await chromium.launch({ headless: isHeadless });
@@ -76,24 +103,54 @@ async function main() {
   const page = await context.newPage();
   try {
     // 1. LOGIN
-    process.stdout.write('   - Step 1/5: Authenticating with WordPress...');
-    await page.goto(`${targetUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#user_login', { state: 'visible', timeout: 30000 });
+    process.stdout.write(`   - Step 1/5: Authenticating with WordPress at ${loginUrl}...`);
+    await page.goto(loginUrl, { waitUntil: 'domcontentloaded' });
+    
+    if (!(await page.isVisible('#user_login'))) {
+        console.log(' Failed.');
+        console.error('LOGIN_URL_INVALID');
+        process.exit(2);
+    }
+
     await page.fill('#user_login', username);
-    await page.waitForSelector('#user_pass', { state: 'visible', timeout: 30000 });
     await page.fill('#user_pass', password);
-    await page.waitForSelector('#wp-submit', { state: 'visible', timeout: 30000 });
     await page.click('#wp-submit');
-    await page.waitForSelector('#wpadminbar', { timeout: 60000 }); 
+    
+    try {
+        await page.waitForSelector('#wpadminbar, #login_error, #correct-admin-email', { timeout: 60000 });
+    } catch (e) {
+        throw new Error('Authentication timed out. The page did not load the admin bar, a login error, or the admin email confirmation screen.');
+    }
+
+    if (await page.isVisible('#login_error')) {
+        const errorText = await page.locator('#login_error').textContent();
+        console.error(`LOGIN_FAILED: ${errorText.trim()}`);
+        process.exit(3);
+    }
+
+    if (await page.isVisible('#correct-admin-email')) {
+        process.stdout.write(' Admin email confirmation required. Submitting...');
+        await page.click('#correct-admin-email');
+        await page.waitForSelector('#wpadminbar', { timeout: 60000 });
+    }
 
     if (!(await page.isVisible('#wpadminbar'))) { 
-      throw new Error('Authentication failed. Please check credentials or for 2FA/CAPTCHA.');
+      throw new Error('Authentication failed. Admin bar not found after login.');
     }
+
+    // --- Recovery Step: Navigate to the main dashboard to bypass any welcome/update screens ---
+    if (!page.url().startsWith(adminUrl)) {
+        process.stdout.write(' Navigating to main dashboard to bypass intermediate pages...');
+        await page.goto(adminUrl, { waitUntil: 'networkidle' });
+        await page.waitForSelector('#wpadminbar'); // Re-confirm we are in the admin area
+        process.stdout.write(' Done.');
+    }
+
     console.log(' Success!');
 
     // 2. CHECK IF PLUGIN EXISTS & ACTIVATE IF NEEDED
     process.stdout.write('   - Step 2/5: Checking plugin status...');
-    await page.goto(`${targetUrl}/wp-admin/plugins.php`, { waitUntil: 'networkidle' }); 
+    await page.goto(`${adminUrl}plugins.php`, { waitUntil: 'networkidle' }); 
 
     const pluginRow = page.locator('tr[data-slug="disembark-connector"]');
     if (await pluginRow.count() > 0) { 
@@ -135,32 +192,27 @@ async function main() {
 
       console.log(' Download complete.');
       process.stdout.write('   - Uploading and installing...');
-      await page.goto(`${targetUrl}/wp-admin/plugin-install.php?tab=upload`);
+      await page.goto(`${adminUrl}plugin-install.php?tab=upload`);
       await page.setInputFiles('input#pluginzip', pluginZipPath);
       await page.waitForSelector('input#install-plugin-submit:not([disabled])', { timeout: 10000 });
 
       await page.click('input#install-plugin-submit');
       
-      // Define selectors for all possible outcomes after installation attempt.
       const activationLinkSelector = 'a:has-text("Activate Plugin"), a.activate-now, .button.activate-now';
       const alreadyInstalledSelector = 'body:has-text("Destination folder already exists.")';
-      const mixedSuccessSelector = 'body:has-text("Plugin installed successfully.")'; // For your specific error case
+      const mixedSuccessSelector = 'body:has-text("Plugin installed successfully.")';
       const genericErrorSelector = '.wrap > .error, .wrap > #message.error';
       
       try {
-        // Wait for ANY of the outcomes to appear on the page.
         await page.waitForSelector(
           `${activationLinkSelector}, ${alreadyInstalledSelector}, ${mixedSuccessSelector}, ${genericErrorSelector}`,
           { timeout: 90000 }
         );
       } catch (e) {
-        // If none of the expected outcomes appear, throw a specific timeout error.
-        throw new Error('Timed out waiting for a response after clicking "Install Now". The page may have hung or produced an unexpected result.');
+        throw new Error('Timed out waiting for a response after clicking "Install Now".');
       }
 
-      // Now, check which outcome occurred and act accordingly.
       if (await page.locator(activationLinkSelector).count() > 0) {
-        // Outcome 1: Success, the plugin was installed and needs activation.
         const activateButton = page.locator(activationLinkSelector);
         await Promise.all([
           page.waitForNavigation({ waitUntil: 'networkidle' }),
@@ -168,12 +220,10 @@ async function main() {
         ]);
         console.log(' Installed & Activated!');
       } else if (await page.locator(alreadyInstalledSelector).count() > 0) {
-        // Outcome 2: The plugin was already installed.
         console.log(' Plugin already installed.');
       } else if (await page.locator(mixedSuccessSelector).count() > 0) {
-        // Outcome 3: Install was successful, but the page crashed.
         console.log(' Install succeeded, but page reported an error. Navigating to plugins page to activate...');
-        await page.goto(`${targetUrl}/wp-admin/plugins.php`, { waitUntil: 'networkidle' });
+        await page.goto(`${adminUrl}plugins.php`, { waitUntil: 'networkidle' });
         const pluginRow = page.locator('tr[data-slug="disembark-connector"]');
         const activateLink = pluginRow.locator('a.edit:has-text("Activate")');
         if (await activateLink.count() > 0) {
@@ -186,7 +236,6 @@ async function main() {
             console.log('   - Plugin was already active on the plugins page.');
         }
       } else {
-        // Outcome 4: A generic WordPress error occurred.
         const errorText = await page.locator(genericErrorSelector).first().textContent();
         throw new Error(`Plugin installation failed with a WordPress error: ${errorText.trim()}`);
       }
@@ -197,7 +246,7 @@ async function main() {
 
     // 4. RETRIEVE TOKEN
     process.stdout.write('   - Step 4/5: Retrieving connection token...');
-    const tokenPageUrl = `${targetUrl}/wp-admin/plugin-install.php?tab=plugin-information&plugin=disembark-connector`; 
+    const tokenPageUrl = `${adminUrl}plugin-install.php?tab=plugin-information&plugin=disembark-connector`; 
     await page.goto(tokenPageUrl, { waitUntil: 'networkidle' });
 
     const tokenElement = page.locator('div#section-description > code');
@@ -221,34 +270,106 @@ async function main() {
 main();
 EOF
 )
+    # --- Helper function for getting credentials ---
+    _get_credentials() {
+        echo "Please provide WordPress administrator credentials:"
+        username=$("$GUM_CMD" input --placeholder="Enter WordPress username...")
+        if [ -z "$username" ]; then
+            echo "No username provided. Aborting." >&2
+            return 1
+        fi
 
-    # --- 4. Run Browser Automation ---
-    echo "🤖 Launching browser to automate login and plugin setup..."
+        password=$("$GUM_CMD" input --placeholder="Enter WordPress password..." --password)
+        if [ -z "$password" ]; then
+            echo "No password provided. Aborting." >&2
+            return 1
+        fi
+        return 0
+    }
 
-    # Enable pipefail to catch errors from the node script before the pipe to tee
-    set -o pipefail
-    local full_output
-    full_output=$(echo "$PLAYWRIGHT_SCRIPT" | node - "$target_url" "$username" "$password" "$debug_flag" | tee /dev/tty)
-    local exit_code=$?
+    # --- Helper for running playwright ---
+    run_playwright_and_get_token() {
+        local url_to_run="$1"
+        local path_to_run="$2"
+        local user_to_run="$3"
+        local pass_to_run="$4"
 
-    # Disable pipefail after the command to avoid affecting other parts of the script
-    set +o pipefail
+        echo "🤖 Launching browser to automate login and plugin setup..."
+        echo "   - Attempting login at: ${url_to_run}${path_to_run}"
 
-    if [ $exit_code -ne 0 ]; then
-        # The error message from the script has already been displayed by tee
-        echo "❌ Browser automation failed." >&2
+        set -o pipefail
+        local full_output
+        full_output=$(echo "$PLAYWRIGHT_SCRIPT" | node - "$url_to_run" "$path_to_run" "$user_to_run" "$pass_to_run" "$debug_flag" | tee /dev/tty)
+        local exit_code=$?
+        set +o pipefail
+
+        if [ $exit_code -eq 3 ]; then
+            return 3 # Bad credentials
+        elif [ $exit_code -eq 2 ]; then
+            return 2 # Invalid URL
+        elif [ $exit_code -ne 0 ]; then
+            return 1 # General failure
+        fi
+        
+        echo "$full_output" | tail -n 1 | tr -d '[:space:]'
+        return 0
+    }
+
+    # --- Authentication Loop ---
+    local token
+    local playwright_exit_code
+    
+    # Initial credential prompt
+    if ! _get_credentials; then return 1; fi
+
+    while true; do
+        token=$(run_playwright_and_get_token "$base_url" "$login_path" "$username" "$password")
+        playwright_exit_code=$?
+
+        if [ $playwright_exit_code -eq 0 ]; then
+            break # Success
+        elif [ $playwright_exit_code -eq 2 ]; then # Invalid URL
+            echo "⚠️ The login URL '${base_url}${login_path}' appears to be incorrect."
+            local new_login_url
+            new_login_url=$("$GUM_CMD" input --placeholder="Enter the full, correct WordPress Admin URL...")
+
+            if [ -z "$new_login_url" ]; then
+                echo "No URL provided. Aborting." >&2; return 1;
+            fi
+            base_url=$(echo "$new_login_url" | sed -E 's#(https?://[^/]+).*#\1#')
+            login_path=$(echo "$new_login_url" | sed -E "s#$base_url##")
+            continue # Retry loop with new URL
+        elif [ $playwright_exit_code -eq 3 ]; then # Bad credentials
+            echo "⚠️ Login failed. The credentials may be incorrect."
+            if "$GUM_CMD" confirm "Re-enter credentials and try again?"; then
+                if ! _get_credentials; then return 1; fi
+                continue # Retry loop with new credentials
+            else
+                echo "Authentication cancelled." >&2; return 1;
+            fi
+        else # General failure
+            echo "❌ Browser automation failed. Please check errors above." >&2
+            return 1
+        fi
+    done
+
+    # --- Final Check and Backup ---
+    if [ $playwright_exit_code -ne 0 ] || [ -z "$token" ]; then
+        echo "❌ Could not retrieve a token. Aborting." >&2
         return 1
     fi
 
-    local token
-    token=$(echo "$full_output" | tail -n 1 | tr -d '[:space:]')
-
-    echo "✅ Browser automation successful. Token retrieved: ${token}"
-
-    # --- 5. Connect and Backup ---
+    echo "✅ Browser automation successful. Token retrieved."
     echo "📞 Connecting and starting backup with disembark-cli..."
-    "$DISEMBARK_CMD" connect "${target_url}" "${token}"
-    "$DISEMBARK_CMD" backup "${target_url}"
+    if ! "$DISEMBARK_CMD" connect "${base_url}" "${token}"; then
+        echo "❌ Error: Failed to connect using the retrieved token." >&2
+        return 1
+    fi
+    
+    if ! "$DISEMBARK_CMD" backup "${base_url}"; then
+        echo "❌ Error: Backup command failed after connecting." >&2
+        return 1
+    fi
 
     echo "✨ Disembark process complete!" 
 }
