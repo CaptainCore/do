@@ -3,6 +3,7 @@
 # ----------------------------------------------------
 function run_disembark() {
     local target_url="$1"
+    local debug_flag="$2"
 
     echo "🚀 Starting Disembark process for ${target_url}..."
 
@@ -59,14 +60,16 @@ const path = require('path');
 const PLUGIN_ZIP_URL = 'https://github.com/DisembarkHost/disembark-connector/releases/latest/download/disembark-connector.zip';
 
 async function main() {
-  const [, , targetUrl, username, password] = process.argv;
+  const [, , targetUrl, username, password, debugFlag] = process.argv;
 
   if (!targetUrl || !username || !password) {
-    console.error('Usage: node disembark-browser.js <url> <username> <password>');
+    console.error('Usage: node disembark-browser.js <url> <username> <password> [debug]');
     process.exit(1);
   }
 
-  const browser = await chromium.launch({ headless: true }); 
+  const isHeadless = debugFlag !== 'true';
+  const browser = await chromium.launch({ headless: isHeadless });
+
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
   });
@@ -74,16 +77,17 @@ async function main() {
   try {
     // 1. LOGIN
     process.stdout.write('   - Step 1/5: Authenticating with WordPress...');
-    await page.goto(`${targetUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' }); 
+    await page.goto(`${targetUrl}/wp-login.php`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#user_login', { state: 'visible', timeout: 30000 });
     await page.fill('#user_login', username);
+    await page.waitForSelector('#user_pass', { state: 'visible', timeout: 30000 });
     await page.fill('#user_pass', password);
-    // Click first, then wait for a specific element on the next page. This is more reliable.
-    await page.click('#wp-submit'); 
-    await page.waitForSelector('#wpadminbar', { timeout: 60000 }); // Wait 60s for admin bar 
+    await page.waitForSelector('#wp-submit', { state: 'visible', timeout: 30000 });
+    await page.click('#wp-submit');
+    await page.waitForSelector('#wpadminbar', { timeout: 60000 }); 
 
-    // Verify login by checking for the admin bar.
     if (!(await page.isVisible('#wpadminbar'))) { 
-      throw new Error('Authentication failed. Please check credentials or for 2FA/CAPTCHA.'); 
+      throw new Error('Authentication failed. Please check credentials or for 2FA/CAPTCHA.');
     }
     console.log(' Success!');
 
@@ -93,8 +97,7 @@ async function main() {
 
     const pluginRow = page.locator('tr[data-slug="disembark-connector"]');
     if (await pluginRow.count() > 0) { 
-      console.log(' Plugin found.'); 
-      // More robustly check if the 'Activate' link exists.
+      console.log(' Plugin found.');
       const activateLink = pluginRow.locator('a.edit:has-text("Activate")');
       if (await activateLink.count() > 0) { 
         process.stdout.write('   - Activating existing plugin...');
@@ -104,15 +107,14 @@ async function main() {
         ]);
         console.log(' Activated!'); 
       } else {
-        console.log('   - Plugin already active.'); 
+        console.log('   - Plugin already active.');
       }
     } else {
       // 3. UPLOAD AND INSTALL PLUGIN
-      console.log(' Plugin not found, proceeding with installation.'); 
+      console.log(' Plugin not found, proceeding with installation.');
       process.stdout.write('   - Step 3/5: Downloading plugin...');
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'disembark-'));
       const pluginZipPath = path.join(tempDir, 'disembark-connector.zip');
-      // This promise-based downloader now correctly handles HTTP redirects.
       await new Promise((resolve, reject) => { 
         const file = fs.createWriteStream(pluginZipPath);
         const request = (url) => {
@@ -139,15 +141,16 @@ async function main() {
 
       await page.click('input#install-plugin-submit');
       
-      // Define selectors for possible outcomes after installation attempt.
+      // Define selectors for all possible outcomes after installation attempt.
       const activationLinkSelector = 'a:has-text("Activate Plugin"), a.activate-now, .button.activate-now';
       const alreadyInstalledSelector = 'body:has-text("Destination folder already exists.")';
-      const genericErrorSelector = '.wrap > .error, .wrap > #message.error'; // Common WP error notice selectors
+      const mixedSuccessSelector = 'body:has-text("Plugin installed successfully.")'; // For your specific error case
+      const genericErrorSelector = '.wrap > .error, .wrap > #message.error';
       
       try {
-        // Wait for any of the outcomes to appear on the page.
+        // Wait for ANY of the outcomes to appear on the page.
         await page.waitForSelector(
-          `${activationLinkSelector}, ${alreadyInstalledSelector}, ${genericErrorSelector}`,
+          `${activationLinkSelector}, ${alreadyInstalledSelector}, ${mixedSuccessSelector}, ${genericErrorSelector}`,
           { timeout: 90000 }
         );
       } catch (e) {
@@ -167,9 +170,23 @@ async function main() {
       } else if (await page.locator(alreadyInstalledSelector).count() > 0) {
         // Outcome 2: The plugin was already installed.
         console.log(' Plugin already installed.');
-        // No action needed here, the script will proceed to the token retrieval step.
+      } else if (await page.locator(mixedSuccessSelector).count() > 0) {
+        // Outcome 3: Install was successful, but the page crashed.
+        console.log(' Install succeeded, but page reported an error. Navigating to plugins page to activate...');
+        await page.goto(`${targetUrl}/wp-admin/plugins.php`, { waitUntil: 'networkidle' });
+        const pluginRow = page.locator('tr[data-slug="disembark-connector"]');
+        const activateLink = pluginRow.locator('a.edit:has-text("Activate")');
+        if (await activateLink.count() > 0) {
+            await Promise.all([
+              page.waitForNavigation({ waitUntil: 'networkidle' }),
+              activateLink.click()
+            ]);
+            console.log(' Activated!');
+        } else {
+            console.log('   - Plugin was already active on the plugins page.');
+        }
       } else {
-        // Outcome 3: A generic WordPress error occurred.
+        // Outcome 4: A generic WordPress error occurred.
         const errorText = await page.locator(genericErrorSelector).first().textContent();
         throw new Error(`Plugin installation failed with a WordPress error: ${errorText.trim()}`);
       }
@@ -185,12 +202,12 @@ async function main() {
 
     const tokenElement = page.locator('div#section-description > code');
     if (await tokenElement.count() === 0) { 
-      throw new Error('Could not find the connection token element on the page.'); 
+      throw new Error('Could not find the connection token element on the page.');
     }
     const token = await tokenElement.first().textContent();
     console.log(' Token found!');
     // 5. OUTPUT TOKEN FOR BASH SCRIPT
-    process.stdout.write('   - Step 5/5: Sending token back to script...'); 
+    process.stdout.write('   - Step 5/5: Sending token back to script...');
     console.log(token.trim()); 
     
   } catch (error) {
@@ -211,7 +228,7 @@ EOF
     # Enable pipefail to catch errors from the node script before the pipe to tee
     set -o pipefail
     local full_output
-    full_output=$(echo "$PLAYWRIGHT_SCRIPT" | node - "$target_url" "$username" "$password" | tee /dev/tty)
+    full_output=$(echo "$PLAYWRIGHT_SCRIPT" | node - "$target_url" "$username" "$password" "$debug_flag" | tee /dev/tty)
     local exit_code=$?
 
     # Disable pipefail after the command to avoid affecting other parts of the script
