@@ -826,10 +826,13 @@ function show_command_help() {
         disembark)
             echo "Remotely installs the Disembark plugin, connects, and initiates a backup."
             echo
-            echo "Usage: _do disembark <url>"
+            echo "Usage: _do disembark <url> [--debug]"
             echo
             echo "Arguments:"
             echo "  <url>  (Required) The full URL to the WordPress site."
+            echo
+            echo "Flags:"
+            echo "  --debug  Runs the browser automation in headed mode (not headless) for debugging."
             echo
             echo "You will be interactively prompted for an administrator username and password."
             ;;
@@ -1123,6 +1126,8 @@ function main() {
     local exclude_patterns=()
     local backup_exclude_patterns=()
     local positional_args=()
+    local quiet_flag=""
+    local debug_flag=""
     
     while [[ $# -gt 0 ]]; do
       case $1 in
@@ -1197,6 +1202,10 @@ function main() {
           ;;
         --quiet)
           quiet_flag=true
+          shift
+          ;;
+        --debug)
+          debug_flag=true
           shift
           ;;
         -*)
@@ -1331,7 +1340,7 @@ function main() {
             esac
             ;;
         disembark)
-            run_disembark "${positional_args[1]}"
+            run_disembark "${positional_args[1]}" "$debug_flag"
             ;;
         dump)
             # There should be exactly 2 positional args total: 'dump' and the pattern.
