@@ -18,6 +18,7 @@ CWEBP_CMD=""
 IDENTIFY_CMD=""
 WP_CLI_CMD=""
 RESTIC_CMD=""
+DISEMBARK_CMD=""
 
 # --- Helper Functions ---
 
@@ -118,6 +119,115 @@ function _get_private_dir() {
 
     echo "Error: Could not find or create a suitable private, writable directory." >&2
     return 1
+}
+
+# ----------------------------------------------------
+#  Checks for and installs 'disembark' if not present.
+#  Prioritizes standard PATH, then a DISEMBARK_DEV_PATH env var.
+# ----------------------------------------------------
+function setup_disembark() {
+    # Return if already found
+    if [[ -n "$DISEMBARK_CMD" ]]; then
+        return 0
+    fi
+
+    # 1. Check if 'disembark' is in the standard PATH
+    if command -v disembark &> /dev/null; then
+        echo "   - Found 'disembark' in system PATH." >&2
+        DISEMBARK_CMD="disembark"
+        return 0
+    fi
+
+    # 2. Check for a user-defined development path via environment variable
+    if [[ -n "$DISEMBARK_DEV_PATH" && -f "$DISEMBARK_DEV_PATH" && -x "$DISEMBARK_DEV_PATH" ]]; then
+        echo "   - Found development version of 'disembark' via DISEMBARK_DEV_PATH." >&2
+        DISEMBARK_CMD="$DISEMBARK_DEV_PATH"
+        return 0
+    fi
+
+    # 3. If not found, attempt to install it system-wide
+    echo "  Required tool 'disembark' not found. Attempting to install system-wide..." >&2
+
+    # Check for dependencies needed for the installation
+    if ! command -v wget &>/dev/null || ! command -v sudo &>/dev/null; then
+        echo "  Error: 'wget' and 'sudo' are required to install disembark." >&2
+        return 1
+    fi
+
+    local temp_file
+    temp_file=$(mktemp)
+
+    echo "   - Downloading disembark.phar..."
+    if ! wget -q "https://github.com/DisembarkHost/disembark-cli/raw/main/disembark.phar" -O "$temp_file"; then
+        echo "  Error: Failed to download disembark.phar." >&2
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    chmod +x "$temp_file"
+
+    echo "   - Moving to /usr/local/bin/disembark. You may be prompted for your password." >&2
+    if ! sudo mv "$temp_file" /usr/local/bin/disembark; then
+        echo "  Error: Failed to move disembark.phar to /usr/local/bin/." >&2
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    echo "  'disembark' installed successfully." >&2
+    DISEMBARK_CMD="/usr/local/bin/disembark"
+    return 0
+}
+
+# ----------------------------------------------------
+#  Checks for and installs Playwright and its browser dependencies.
+#  Sets a global variable PLAYWRIGHT_READY on success.
+# ----------------------------------------------------
+function setup_playwright() {
+    # Return if already checked and ready
+    if [[ -n "$PLAYWRIGHT_READY" ]]; then
+        return 0
+    fi
+
+    # --- Pre-flight Checks ---
+    if ! command -v node &>/dev/null; then
+        echo "❌ Error: Node.js is required for Playwright." >&2
+        return 1
+    fi
+    if ! command -v npm &>/dev/null; then
+        echo "❌ Error: npm is required to install Playwright." >&2
+        return 1
+    fi
+
+    # --- Check for Browser Executable ---
+    # This is a more robust check. require('playwright') can succeed,
+    # but executablePath() will fail if browsers aren't installed.
+    if node -e "require('playwright').chromium.executablePath()" >/dev/null 2>&1; then
+        echo "   - ✅ Playwright and required browsers are already installed."
+        PLAYWRIGHT_READY=true
+        return 0
+    fi
+
+    # --- Installation ---
+    echo "   - ⚠️ Playwright or its browsers are missing. Attempting to install now..."
+    echo "     This may take a few minutes as it downloads the browser binaries."
+
+    # Step 1: Install the NPM package
+    if ! npm install playwright; then
+        echo "❌ Error: Failed to install the Playwright npm package." >&2
+        echo "   Please try running 'npm install playwright' manually in this directory." >&2
+        return 1
+    fi
+
+    # Step 2: Install the browser binaries (specifically chromium)
+    if ! npx playwright install chromium; then
+        echo "❌ Error: Failed to download Playwright's browser binaries." >&2
+        echo "   Please try running 'npx playwright install chromium' manually." >&2
+        return 1
+    fi
+
+    echo "   - ✅ Playwright and its browsers installed successfully."
+    PLAYWRIGHT_READY=true
+    return 0
 }
 
 # ----------------------------------------------------
@@ -713,6 +823,16 @@ function show_command_help() {
             echo "  optimize         Converts tables to InnoDB, reports large tables, and cleans transients."
             echo "  change-prefix    Changes the database table prefix."
             ;;
+        disembark)
+            echo "Remotely installs the Disembark plugin, connects, and initiates a backup."
+            echo
+            echo "Usage: _do disembark <url>"
+            echo
+            echo "Arguments:"
+            echo "  <url>  (Required) The full URL to the WordPress site."
+            echo
+            echo "You will be interactively prompted for an administrator username and password."
+            ;;
         dump)
             echo "Dumps the content of files matching a pattern into a single text file."
             echo
@@ -930,6 +1050,7 @@ function show_usage() {
     echo "  convert-to-webp     Finds and converts large images (JPG, PNG) to WebP format."
     echo "  cron                Manages cron jobs and schedules tasks to run at specific times."
     echo "  db                  Performs various database operations (backup, check-autoload, optimize)."
+    echo "  disembark           Remotely connects to a site to generate a backup."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
     echo "  email               Sends an email using wp_mail via WP-CLI."
     echo "  find                Finds files, slow plugins, hidden plugins or outdated PHP tags."
@@ -1184,6 +1305,10 @@ function main() {
                     ;;
             esac
             ;;
+        convert-to-webp)
+            # Pass the optional folder (positional_args[1]) and the --all flag
+            convert_to_webp "${positional_args[1]}" "$all_files_flag"
+            ;;
         db)
             local arg1="${positional_args[1]}"
             case "$arg1" in
@@ -1205,9 +1330,8 @@ function main() {
                     ;;
             esac
             ;;
-        convert-to-webp)
-            # Pass the optional folder (positional_args[1]) and the --all flag
-            convert_to_webp "${positional_args[1]}" "$all_files_flag"
+        disembark)
+            run_disembark "${positional_args[1]}"
             ;;
         dump)
             # There should be exactly 2 positional args total: 'dump' and the pattern.
