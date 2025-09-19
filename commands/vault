@@ -275,7 +275,7 @@ function _file_action_menu() {
         "Back") 
             return
             ;;
-        *) 
+        *)
     esac
 }
 
