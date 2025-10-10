@@ -349,3 +349,64 @@ function find_outdated_php_tags() {
         echo "Recommendation: Replace all short tags like '<?' with the full '<?php' tag."
     fi
 }
+
+# ----------------------------------------------------
+#  Identifies a plugin that may be causing WP-CLI commands to hang or time out.
+# ----------------------------------------------------
+function find_stuck_plugin() {
+    # --- Pre-flight Checks ---
+    if ! setup_wp_cli; then echo "  Error: WP-CLI not found." >&2; return 1; fi
+    if ! "$WP_CLI_CMD" core is-installed --quiet; then echo "  Error: This does not appear to be a WordPress installation." >&2; return 1; fi
+    if ! command -v timeout &> /dev/null; then echo "  Error: 'timeout' command not found. This is required to detect hanging processes." >&2; return 1; fi
+
+    # --- Baseline Check ---
+    echo "  Performing a baseline check to confirm WP-CLI is hanging..."
+    timeout 3s "$WP_CLI_CMD" option get home >/dev/null 2>&1
+
+    if [ $? -eq 0 ]; then
+        echo "  Baseline check successful. WP-CLI doesn't appear to be hanging."
+        return 0
+    else
+        echo "  Baseline check timed out. Confirmed that WP-CLI is hanging, proceeding with test."
+    fi
+
+    echo
+    echo "  🚀 Starting stuck plugin check..."
+    echo "  This will test each active plugin to see if skipping it allows WP-CLI to respond quickly."
+    echo
+
+    # --- List of active plugins to test ---
+    local plugins
+    plugins=$("$WP_CLI_CMD" plugin list --field=name --status=active --skip-plugins)
+
+    if [ -z "$plugins" ]; then
+        echo "  No active plugins found to test."
+        return 0
+    fi
+
+    # --- Loop through each plugin ---
+    for plugin in $plugins; do
+        echo -n "  Testing with '$plugin' skipped..."
+
+        # Run the WP-CLI command with a 3-second timeout.
+        # We silence the output since we only care if it succeeds.
+        timeout 3s "$WP_CLI_CMD" option get home --skip-plugins="$plugin" >/dev/null 2>&1
+
+        # Check the exit code of the last command
+        if [ $? -eq 0 ]; then
+            # An exit code of 0 means the command completed successfully within the time limit.
+            echo " ✅ SUCCESS!"
+            echo "--------------------------------------------------------"
+            echo "  Found the culprit! The site responded quickly when skipping:"
+            echo "  ➡️  $plugin"
+            echo "--------------------------------------------------------"
+            return 0
+        else
+            # A non-zero exit code means it timed out or failed.
+            echo " ❌ Timeout."
+        fi
+    done
+
+    echo "--------------------------------------------------------"
+    echo "  ⏹️  Finished testing all plugins. No single plugin could be identified as the culprit."
+}

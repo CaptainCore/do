@@ -867,6 +867,7 @@ function show_command_help() {
             echo "Subcommands:"
             echo "  recent-files [days]  Finds files modified within the last <days>. Defaults to 1 day."
             echo "  slow-plugins [path]  Identifies plugins slowing down WP-CLI. Optionally check a specific page path (e.g., \"/contact\")."
+            echo "  stuck-plugin         Identifies a plugin causing WP-CLI commands to hang by timing them out."
             echo "  hidden-plugins       Detects active plugins that may be hidden from the standard list."
             echo "  malware              Scans for malware and verifies core/plugin file integrity."
             echo "  php-tags [dir]       Finds outdated PHP short tags ('<?'). Defaults to 'wp-content/'."
@@ -1056,7 +1057,7 @@ function show_usage() {
     echo "  disembark           Remotely connects to a site to generate a backup."
     echo "  dump                Dumps the content of files matching a pattern into a single text file."
     echo "  email               Sends an email using wp_mail via WP-CLI."
-    echo "  find                Finds files, slow plugins, hidden plugins or outdated PHP tags."
+    echo "  find                Finds files, slow/stuck plugins, hidden plugins or outdated PHP tags."
     echo "  https               Applies HTTPS to all site URLs, with an option for www/non-www."
     echo "  install             Installs helper plugins or premium plugins."
     echo "  launch              Launches a site to a new domain, using a flag or interactively."
@@ -1363,6 +1364,9 @@ function main() {
                     ;;
                 slow-plugins)
                     find_slow_plugins "${positional_args[2]}"
+                    ;;
+                stuck-plugin)
+                    find_stuck_plugin
                     ;;
                 hidden-plugins)
                     find_hidden_plugins
