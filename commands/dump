@@ -56,7 +56,6 @@ function run_dump() {
     done
 
     # Add automatic exclusions for the output file and .git directory
-    Exclude the output file itself using the correct predicate based on search path
     if [ "$SEARCH_DIR" == "." ]; then
         # When searching from '.', find sees paths like './filename.txt'
         # So we need to exclude based on the relative path.
