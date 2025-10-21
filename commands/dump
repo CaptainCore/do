@@ -56,7 +56,16 @@ function run_dump() {
     done
 
     # Add automatic exclusions for the output file and .git directory
-    find_cmd+=("-not" "-name" "$OUTPUT_FILE")
+    Exclude the output file itself using the correct predicate based on search path
+    if [ "$SEARCH_DIR" == "." ]; then
+        # When searching from '.', find sees paths like './filename.txt'
+        # So we need to exclude based on the relative path.
+        find_cmd+=("-not" "-path" "./$OUTPUT_FILE")
+    else
+        # When searching in a specific subdir, excluding by name is usually sufficient
+        # as the output file isn't typically inside the SEARCH_DIR unless SEARCH_DIR is '.'
+        find_cmd+=("-not" "-name" "$OUTPUT_FILE")
+    fi
     find_cmd+=("-not" "-path" "*/.git/*")
 
     # Execute the find command
