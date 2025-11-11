@@ -38,7 +38,7 @@ function run_dump() {
     if [ ${#exclude_patterns[@]} -gt 0 ]; then
         echo "Excluding user-defined patterns: ${exclude_patterns[*]}"
     fi
-    echo "Automatically excluding: .git directory contents"
+    echo "Automatically excluding: .git directory contents, .DS_Store files"
 
     # Dynamically build the find command
     local find_cmd=("find" "$SEARCH_DIR" "-type" "f" "-name" "$FILE_PATTERN")
@@ -55,17 +55,16 @@ function run_dump() {
         fi
     done
 
-    # Add automatic exclusions for the output file and .git directory
-    if [ "$SEARCH_DIR" == "." ]; then
-        # When searching from '.', find sees paths like './filename.txt'
-        # So we need to exclude based on the relative path.
-        find_cmd+=("-not" "-path" "./$OUTPUT_FILE")
-    else
-        # When searching in a specific subdir, excluding by name is usually sufficient
-        # as the output file isn't typically inside the SEARCH_DIR unless SEARCH_DIR is '.'
-        find_cmd+=("-not" "-name" "$OUTPUT_FILE")
-    fi
+    # Add automatic exclusions
+
+    # Exclude the output file by *both* name and relative path.
+    # This robustly prevents the dump file from including itself.
+    find_cmd+=("-not" "-name" "$OUTPUT_FILE")
+    find_cmd+=("-not" "-path" "./$OUTPUT_FILE")
+
+    # Automatically exclude .git and .DS_Store files
     find_cmd+=("-not" "-path" "*/.git/*")
+    find_cmd+=("-not" "-name" ".DS_Store")
 
     # Execute the find command
     "${find_cmd[@]}" -print0 | while IFS= read -r -d '' file; do
@@ -82,7 +81,7 @@ function run_dump() {
     fi
 
     local FILE_SIZE
-    FILE_SIZE=$(du -h "$OUTPUT_FILE" | cut -f1 | xargs)
+    FILE_SIZE=$(ls -lh "$OUTPUT_FILE" | awk '{print $5}')
 
     # --- WordPress URL Logic ---
     local dump_url=""
